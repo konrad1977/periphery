@@ -44,10 +44,10 @@ QUERY is an optional search query for highlighting in search results."
           (message "Applying parser: %s" parser-id))
         (periphery-core--apply-parser input config query)))
 
-    ;; Remove duplicates and sort
+    ;; Remove duplicates (based on path, not full content) and sort
     (setq periphery-core-error-list
           (periphery-core--sort-results
-           (delete-dups periphery-core-error-list)))
+           (periphery-core--remove-duplicate-paths periphery-core-error-list)))
 
     (when periphery-debug
       (message "Found %d errors" (length periphery-core-error-list)))
@@ -79,6 +79,33 @@ Optional QUERY is passed to the parser function if it accepts it."
             (when periphery-debug
               (message "    -> Got result!"))
             (push result periphery-core-error-list)))))))
+
+(defun periphery-core--remove-duplicate-paths (results)
+  "Remove duplicate entries from RESULTS based on path (first element).
+When duplicates are found, prefer entries with capitalized messages."
+  (let ((seen (make-hash-table :test 'equal))
+        (unique '()))
+    (dolist (entry results)
+      (let* ((path (car entry))
+             (existing (gethash path seen)))
+        (if existing
+            ;; If we've seen this path, keep the one with better capitalization
+            (let* ((existing-msg (aref (cadr existing) 3))
+                   (new-msg (aref (cadr entry) 3))
+                   ;; Prefer messages that start with uppercase
+                   (prefer-new (and (> (length new-msg) 0)
+                                   (> (length existing-msg) 0)
+                                   (let ((new-first (substring new-msg 0 1))
+                                         (existing-first (substring existing-msg 0 1)))
+                                     (and (string= (upcase new-first) new-first)
+                                          (string= (downcase existing-first) existing-first))))))
+              (when prefer-new
+                (puthash path entry seen)))
+          ;; First time seeing this path
+          (puthash path entry seen))))
+    ;; Extract all unique entries from hash table
+    (maphash (lambda (_path entry) (push entry unique)) seen)
+    unique))
 
 (defun periphery-core--sort-results (results)
   "Sort RESULTS by severity and file."
