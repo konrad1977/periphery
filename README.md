@@ -1,6 +1,12 @@
-# Periphery - Generic Parser Framework for Emacs
+<div align="center">
+  <img src="logo/periphery.png" alt="Periphery Logo" width="200"/>
 
-Periphery is a flexible, configurable parsing framework for displaying compilation errors, test results, search matches, and linter output in a unified interface.
+  # Periphery
+
+  **Generic Parser Framework for Emacs**
+
+  A flexible, configurable parsing framework for displaying compilation errors, test results, search matches, and linter output in a unified interface within Emacs.
+</div>
 
 ## Features
 
@@ -8,184 +14,292 @@ Periphery is a flexible, configurable parsing framework for displaying compilati
 - **Unified Display**: All results shown in a consistent tabulated list format
 - **Extensible**: Easy to add new parsers for different tools
 - **Performance Optimized**: Async parsing support for large outputs
-- **Rich Faces**: Customizable colors and faces for different severity levels
+- **Rich Syntax Highlighting**: Customizable faces for different severity levels and syntax elements
 
-## Architecture
+## Screenshots
 
-The system is split into several components:
+### Compiler Errors and Warnings
+![Periphery displaying compiler errors](screenshots/periphery-errors.png)
 
-### periphery-config.el
-Configuration and registration system for parsers. Provides:
-- Parser registration API
-- Enable/disable parsers dynamically
-- Query parsers by type
-- Built-in pattern definitions
+### TODO/FIXME Tracking
+![Periphery displaying TODO items](screenshots/periphery-todo.png)
 
-### periphery-core.el
-Core parsing engine that:
-- Processes input through registered parsers
-- Sorts and deduplicates results
-- Provides async parsing support
-- Maintains compatibility layer for existing code
+## Installation
 
-### periphery-parsers.el
-Implementation of actual parsers for:
-- Compiler errors/warnings
-- XCTest results
-- Search results with TODO/FIXME detection
-- Ktlint output
-- SwiftLint output
+Load periphery in your Emacs configuration:
 
-### periphery.el
-Main UI and display logic:
-- Tabulated list display
-- Navigation and opening files
-- Face definitions
-- Buffer management
+```elisp
+(require 'periphery)
+```
 
-## Usage
+## Public API
 
-### Basic Usage
+### Parsing Functions
+
+#### `periphery-run-parser`
+Parse input with automatic parser selection.
 
 ```elisp
 ;; Parse compiler output
-(periphery-run-parser compiler-output)
+(periphery-run-parser compiler-output :compiler)
 
-;; Parse search results
-(periphery-parse-search-result :text search-output :query "TODO")
+;; Parse search results with query highlighting
+(periphery-run-parser search-output :search "TODO")
 
-;; Parse with specific parser type
-(periphery-core-parse 
+;; Parse linter output
+(periphery-run-parser ktlint-output :ktlint)
+
+;; Parse test results
+(periphery-run-parser test-output :test)
+```
+
+#### `periphery-core-parse`
+Lower-level parsing function with more control.
+
+```elisp
+(periphery-core-parse
   :input some-output
-  :type :compiler  ; or :search, :linter, :test
-  :callback (lambda (results) 
+  :type :compiler  ; :compiler, :search, :linter, or :test
+  :callback (lambda (results)
               (message "Found %d issues" (length results))))
 ```
 
-### Registering Custom Parsers
+#### `periphery-core-run-async`
+Parse input asynchronously (useful for large outputs).
+
+```elisp
+(periphery-core-run-async
+  compiler-output
+  :compiler
+  (lambda (results)
+    (message "Async parse complete: %d issues" (length results))))
+```
+
+### Parser Management
+
+#### `periphery-register-parser`
+Register a new parser for your tool.
 
 ```elisp
 (periphery-register-parser
-  'my-linter
-  :name "My Custom Linter"
-  :regex "\\([^:]+\\):\\([0-9]+\\): \\(.*\\)"
-  :type :linter
-  :priority 50
-  :parse-fn (lambda (line)
-              ;; Parse line and return entry or nil
-              (when (string-match my-regex line)
-                (periphery-core-build-entry
-                  :path (format "%s:%s" (match-string 1 line) (match-string 2 line))
-                  :file (match-string 1 line)
-                  :line (match-string 2 line)
-                  :severity "warning"
-                  :message (match-string 3 line)
-                  :face-fn #'my-face-function)))
-  :face-fn (lambda (severity)
-             ;; Return appropriate face for severity
-             'periphery-warning-face))
+  'my-parser-id
+  :name "Display Name"
+  :regex "regex-pattern"
+  :type :linter  ; :compiler, :search, :linter, or :test
+  :priority 50   ; Higher = processed first (default: 50)
+  :parse-fn #'my-parse-function
+  :face-fn #'my-face-function)
 ```
 
-### Managing Parsers
+#### `periphery-get-parser`
+Get a parser configuration by ID.
 
 ```elisp
-;; Enable/disable parsers interactively
-M-x periphery-enable-parser
-M-x periphery-disable-parser
-
-;; Get all parsers of a type
-(periphery-get-parsers-by-type :linter)
-
-;; Get specific parser config
 (periphery-get-parser 'compiler)
 ```
 
-## Configuration
-
-### Custom Faces
-
-Periphery provides many faces for customization:
-
-- `periphery-error-face` - Error text
-- `periphery-warning-face` - Warning text  
-- `periphery-info-face` - Informational text
-- `periphery-todo-face` - TODO items
-- `periphery-fix-face` - FIXME items
-- `periphery-performance-face` - Performance notes
-- `periphery-filename-face` - File names
-- `periphery-linenumber-face` - Line numbers
-
-Each severity also has a `-full` variant for backgrounds.
-
-### Variables
-
-- `periphery-debug` - Enable debug output
-- `periphery-trim-message-prefix` - Trim message prefixes
-- `periphery-buffer-name` - Name of the display buffer
-
-## Parser Types
-
-The system supports four parser types:
-
-1. **:compiler** - Compilation errors/warnings
-2. **:search** - Search results and TODOs
-3. **:linter** - Linter output (ktlint, swiftlint, etc.)
-4. **:test** - Test results (XCTest, etc.)
-
-## Extending
-
-To add support for a new tool:
-
-1. Define the regex pattern
-2. Create a parse function
-3. Register the parser
-4. Optionally add a face function
-
-Example for ESLint:
+#### `periphery-get-parsers-by-type`
+Get all enabled parsers of a specific type.
 
 ```elisp
-(defun my-parse-eslint (line)
-  (when (string-match "\\([^:]+\\):\\([0-9]+\\):\\([0-9]+\\)\\s+\\(\\w+\\)\\s+\\(.*\\)" line)
-    (periphery-core-build-entry
-      :path (format "%s:%s:%s" 
-                    (match-string 1 line)
-                    (match-string 2 line) 
-                    (match-string 3 line))
-      :file (match-string 1 line)
-      :line (match-string 2 line)
-      :column (match-string 3 line)
-      :severity (match-string 4 line)
-      :message (match-string 5 line)
-      :face-fn #'periphery-parser--severity-face)))
+(periphery-get-parsers-by-type :linter)
+```
 
+#### `periphery-enable-parser` / `periphery-disable-parser`
+Interactively enable or disable parsers.
+
+```elisp
+M-x periphery-enable-parser
+M-x periphery-disable-parser
+```
+
+### Buffer Management
+
+#### `periphery:toggle-buffer`
+Toggle the visibility of the Periphery results buffer.
+
+```elisp
+M-x periphery:toggle-buffer
+```
+
+#### `periphery-kill-buffer`
+Close and kill the Periphery buffer.
+
+```elisp
+M-x periphery-kill-buffer
+```
+
+### Syntax Highlighting
+
+#### `periphery-add-highlight-pattern`
+Add custom syntax highlighting patterns for error messages.
+
+```elisp
+(periphery-add-highlight-pattern
+  'backticks
+  "`\\([^`]+\\)`"
+  'periphery-identifier-face)
+```
+
+#### `periphery-remove-highlight-pattern`
+Remove a syntax highlighting pattern.
+
+```elisp
+M-x periphery-remove-highlight-pattern
+```
+
+#### `periphery-list-highlight-patterns`
+List all configured highlight patterns.
+
+```elisp
+M-x periphery-list-highlight-patterns
+```
+
+### Configuration Variables
+
+- `periphery-debug` - Enable debug output (default: `nil`)
+- `periphery-trim-message-prefix` - Trim message prefixes up to first colon (default: `nil`)
+
+## Creating a New Parser
+
+Follow these steps to create a parser for a new tool:
+
+### 1. Write a Parse Function
+
+Your parse function receives a line of text and should return an entry or `nil`:
+
+```elisp
+(defun my-tool-parser (line)
+  "Parse output from my-tool."
+  (when (string-match "\\([^:]+\\):\\([0-9]+\\): \\(\\w+\\) - \\(.*\\)" line)
+    (let ((file (match-string 1 line))
+          (line-num (match-string 2 line))
+          (severity (match-string 3 line))
+          (message (match-string 4 line)))
+      (periphery-core-build-entry
+        :path (format "%s:%s" file line-num)
+        :file file
+        :line line-num
+        :severity severity
+        :message message
+        :face-fn #'my-tool-face-function))))
+```
+
+### 2. Create a Face Function (Optional)
+
+Map severity levels to display faces:
+
+```elisp
+(defun my-tool-face-function (severity)
+  "Return face for SEVERITY level."
+  (pcase (downcase severity)
+    ("error" 'periphery-error-face-full)
+    ("warning" 'periphery-warning-face-full)
+    ("info" 'periphery-info-face-full)
+    (_ 'periphery-note-face-full)))
+```
+
+### 3. Register Your Parser
+
+Register the parser to make it active:
+
+```elisp
+(periphery-register-parser
+  'my-tool
+  :name "My Tool"
+  :regex "\\([^:]+\\):\\([0-9]+\\): \\(\\w+\\) - \\(.*\\)"
+  :type :linter
+  :priority 60
+  :parse-fn #'my-tool-parser
+  :face-fn #'my-tool-face-function)
+```
+
+### 4. Use Your Parser
+
+```elisp
+;; Parse my-tool output
+(periphery-run-parser my-tool-output :linter)
+
+;; Or specifically use your parser
+(periphery-core-parse :input my-tool-output :parsers '(my-tool))
+```
+
+### Complete Example: ESLint Parser
+
+Here's a complete example showing all steps:
+
+```elisp
+;; Step 1: Parse function
+(defun my-eslint-parser (line)
+  "Parse ESLint output from LINE."
+  (when (string-match "\\([^:]+\\):\\([0-9]+\\):\\([0-9]+\\): \\(\\w+\\) - \\(.*\\)" line)
+    (let ((file (match-string 1 line))
+          (line-num (match-string 2 line))
+          (col (match-string 3 line))
+          (severity (match-string 4 line))
+          (message (match-string 5 line)))
+      (periphery-core-build-entry
+        :path (format "%s:%s:%s" file line-num col)
+        :file file
+        :line line-num
+        :column col
+        :severity severity
+        :message message
+        :face-fn #'my-eslint-face))))
+
+;; Step 2: Face function
+(defun my-eslint-face (severity)
+  "Return face for ESLint SEVERITY."
+  (pcase (downcase severity)
+    ("error" 'periphery-error-face-full)
+    ("warning" 'periphery-warning-face-full)
+    (_ 'periphery-info-face-full)))
+
+;; Step 3: Register parser
 (periphery-register-parser
   'eslint
   :name "ESLint"
-  :regex "\\([^:]+\\):\\([0-9]+\\):\\([0-9]+\\)\\s+\\(\\w+\\)\\s+\\(.*\\)"
+  :regex "\\([^:]+\\):\\([0-9]+\\):\\([0-9]+\\): \\(\\w+\\) - \\(.*\\)"
   :type :linter
   :priority 70
-  :parse-fn #'my-parse-eslint)
+  :parse-fn #'my-eslint-parser
+  :face-fn #'my-eslint-face)
+
+;; Step 4: Use it
+(periphery-run-parser eslint-output :linter)
 ```
 
-## Migration from Old System
+## Built-in Parsers
 
-The new system maintains backward compatibility through wrapper functions:
-- `periphery-run-parser` - Works as before
-- `periphery-parse-search-result` - Works as before
-- `periphery-parse-ktlint-result` - Can be updated to use new system
+Periphery includes parsers for:
 
-To migrate custom code:
-1. Replace direct regex matching with parser registration
-2. Use `periphery-core-parse` instead of manual parsing
-3. Use `periphery-core-build-entry` for consistent entry format
+- **Compiler**: Xcode/Swift compiler errors and warnings
+- **XCTest**: Xcode test results
+- **Search**: Generic search results with TODO/FIXME detection
+- **Ktlint**: Kotlin linter output
+- **SwiftLint**: Swift linter output
 
-## Performance
+## Available Faces
 
-- Async parsing available via `periphery-core-run-async`
-- Automatic deduplication of results
-- Intelligent sorting by severity
-- Lazy rendering in tabulated list mode
+### Severity Faces
+- `periphery-error-face` / `periphery-error-face-full`
+- `periphery-warning-face` / `periphery-warning-face-full`
+- `periphery-info-face` / `periphery-info-face-full`
+- `periphery-note-face` / `periphery-note-face-full`
+
+### Special Keyword Faces
+- `periphery-todo-face` / `periphery-todo-face-full`
+- `periphery-fix-face` / `periphery-fix-face-full`
+- `periphery-performance-face` / `periphery-performance-face-full`
+- `periphery-hack-face-full`
+
+### UI Element Faces
+- `periphery-filename-face` - File names in results
+- `periphery-linenumber-face` - Line numbers
+- `periphery-identifier-face` - Highlighted identifiers
+- `periphery-message-face` - Message text
+
+Note: `-full` variants include background colors for the severity badges.
 
 ## License
-
-Part of Emacs configuration - see main repository for license details.
+MIT
