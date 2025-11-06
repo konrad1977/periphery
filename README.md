@@ -6,6 +6,12 @@
   **Generic Parser Framework for Emacs**
 
   A flexible, configurable parsing framework for displaying compilation errors, test results, search matches, and linter output in a unified interface within Emacs.
+
+  ---
+
+  ❤️ [Please sponsor me if you like this package](https://github.com/sponsors/konrad1977)
+
+  ---
 </div>
 
 ## Features
@@ -26,10 +32,139 @@
 
 ## Installation
 
+### Using use-package (Emacs 30+)
+
+Emacs 30 includes built-in support for installing packages directly from Git repositories using the `:vc` keyword:
+
+```elisp
+(use-package periphery
+  :vc (:url "https://github.com/konrad1977/periphery"
+       :rev :newest)
+  :custom
+  ;; Adjust background darkness (0-100, higher = darker background)
+  (periphery-background-darkness 85)
+
+  ;; Use theme colors instead of default Catppuccin colors
+  (periphery-use-theme-colors t)
+
+  ;; Trim message prefixes for cleaner display
+  (periphery-trim-message-prefix t)
+
+  ;; Enable debug mode if needed
+  (periphery-debug nil)
+
+  :config
+  ;; Optional: Clear color cache when switching themes
+  (add-hook 'after-load-theme-hook #'periphery--clear-color-cache))
+```
+
+### Manual Installation
+
 Load periphery in your Emacs configuration:
 
 ```elisp
+(add-to-list 'load-path "/path/to/periphery")
 (require 'periphery)
+```
+
+## Configuration
+
+### Color Customization
+
+Periphery now uses a smart color system that automatically generates background colors from foreground colors. You can customize the appearance in several ways:
+
+#### Adjust Background Darkness
+
+Control how much darker the backgrounds should be compared to the text color:
+
+```elisp
+;; Default: 85% darker (darker backgrounds)
+(setq periphery-background-darkness 85)
+
+;; Lighter backgrounds (70% darker)
+(setq periphery-background-darkness 70)
+
+;; Much darker backgrounds (95% darker)
+(setq periphery-background-darkness 95)
+
+;; After changing, clear the color cache
+(periphery--clear-color-cache)
+```
+
+#### Use Theme Colors
+
+Enable automatic color detection from your current theme:
+
+```elisp
+;; Use theme's error/warning/info colors (default: t)
+(setq periphery-use-theme-colors t)
+
+;; Use default Catppuccin colors regardless of theme
+(setq periphery-use-theme-colors nil)
+```
+
+#### Customize Base Face Colors
+
+You can override the base face colors used by periphery:
+
+```elisp
+;; Customize individual face foreground colors
+(custom-set-faces
+ '(periphery-error-face ((t (:foreground "#ff5555"))))
+ '(periphery-warning-face ((t (:foreground "#ffb86c"))))
+ '(periphery-todo-face ((t (:foreground "#8be9fd"))))
+ '(periphery-fix-face ((t (:foreground "#bd93f9"))))
+ '(periphery-note-face ((t (:foreground "#50fa7b"))))
+ '(periphery-hack-face ((t (:foreground "#ff79c6"))))
+ '(periphery-performance-face ((t (:foreground "#f1fa8c"))))
+ '(periphery-mark-face ((t (:foreground "#6272a4")))))
+
+;; Clear cache after face changes
+(periphery--clear-color-cache)
+```
+
+### Complete use-package Configuration Example
+
+Here's a comprehensive example showing all customization options:
+
+```elisp
+(use-package periphery
+  :vc (:url "https://github.com/konrad1977/periphery"
+       :rev :newest)
+  :custom
+  ;; Color system
+  (periphery-background-darkness 85 "Background darkness percentage")
+  (periphery-use-theme-colors t "Use theme colors automatically")
+
+  ;; Display options
+  (periphery-trim-message-prefix t "Remove redundant prefixes from messages")
+  (periphery-debug nil "Enable debug messages")
+
+  :custom-face
+  ;; Customize face colors (backgrounds are auto-generated)
+  (periphery-error-face ((t (:foreground "#f38ba8"))))
+  (periphery-warning-face ((t (:foreground "#f9e2af"))))
+  (periphery-todo-face ((t (:foreground "#74c7ec"))))
+
+  :config
+  ;; Automatically clear color cache when theme changes
+  (add-hook 'after-load-theme-hook #'periphery--clear-color-cache)
+
+  ;; Add custom syntax highlighting patterns
+  (periphery-add-highlight-pattern
+   'my-custom-element
+   "my-regex-pattern"
+   'my-custom-face)
+
+  ;; Optional: Register custom parsers
+  (periphery-register-parser
+   'my-tool
+   :name "My Custom Tool"
+   :regex "^\\(.*\\):\\([0-9]+\\):\\([0-9]+\\): \\(.*\\): \\(.*\\)$"
+   :type :linter
+   :priority 50
+   :parse-fn #'my-custom-parse-function
+   :face-fn #'periphery-parser--severity-face))
 ```
 
 ## Public API
@@ -187,16 +322,27 @@ Your parse function receives a line of text and should return an entry or `nil`:
 
 ### 2. Create a Face Function (Optional)
 
-Map severity levels to display faces:
+Map severity levels to display faces with automatically generated backgrounds:
 
 ```elisp
 (defun my-tool-face-function (severity)
-  "Return face for SEVERITY level."
-  (pcase (downcase severity)
-    ("error" 'periphery-error-face-full)
-    ("warning" 'periphery-warning-face-full)
-    ("info" 'periphery-info-face-full)
-    (_ 'periphery-note-face-full)))
+  "Return face with background for SEVERITY level."
+  (let* ((base-face
+          (pcase (downcase severity)
+            ("error" 'periphery-error-face)
+            ("warning" 'periphery-warning-face)
+            ("info" 'periphery-info-face)
+            (_ 'periphery-note-face))))
+    ;; Generate face with automatic background
+    (periphery--get-face-with-background base-face)))
+```
+
+Or use the built-in helper function:
+
+```elisp
+(defun my-tool-face-function (severity)
+  "Return face with background for SEVERITY level."
+  (periphery-parser--severity-face severity))
 ```
 
 ### 3. Register Your Parser
@@ -247,13 +393,15 @@ Here's a complete example showing all steps:
         :message message
         :face-fn #'my-eslint-face))))
 
-;; Step 2: Face function
+;; Step 2: Face function (generates backgrounds automatically)
 (defun my-eslint-face (severity)
-  "Return face for ESLint SEVERITY."
-  (pcase (downcase severity)
-    ("error" 'periphery-error-face-full)
-    ("warning" 'periphery-warning-face-full)
-    (_ 'periphery-info-face-full)))
+  "Return face with background for ESLint SEVERITY."
+  (let* ((base-face
+          (pcase (downcase severity)
+            ("error" 'periphery-error-face)
+            ("warning" 'periphery-warning-face)
+            (_ 'periphery-info-face))))
+    (periphery--get-face-with-background base-face)))
 
 ;; Step 3: Register parser
 (periphery-register-parser
@@ -281,25 +429,40 @@ Periphery includes parsers for:
 
 ## Available Faces
 
-### Severity Faces
-- `periphery-error-face` / `periphery-error-face-full`
-- `periphery-warning-face` / `periphery-warning-face-full`
-- `periphery-info-face` / `periphery-info-face-full`
-- `periphery-note-face` / `periphery-note-face-full`
+Periphery uses a smart color system where backgrounds are automatically generated from foreground colors. You only need to customize the base faces (foreground colors), and backgrounds will be created automatically based on `periphery-background-darkness`.
 
-### Special Keyword Faces
-- `periphery-todo-face` / `periphery-todo-face-full`
-- `periphery-fix-face` / `periphery-fix-face-full`
-- `periphery-performance-face` / `periphery-performance-face-full`
-- `periphery-hack-face-full`
+### Severity Faces (Base)
+- `periphery-error-face` - Error messages and failures
+- `periphery-warning-face` - Warnings and potential issues
+- `periphery-info-face` - Informational messages
+- `periphery-note-face` - Notes and hints
+
+### Special Keyword Faces (Base)
+- `periphery-todo-face` - TODO items
+- `periphery-fix-face` - FIX/FIXME items
+- `periphery-hack-face` - HACK items
+- `periphery-performance-face` - PERF items
+- `periphery-mark-face` - MARK items
 
 ### UI Element Faces
-- `periphery-filename-face` - File names in results
-- `periphery-linenumber-face` - Line numbers
-- `periphery-identifier-face` - Highlighted identifiers
+- `periphery-filename-face` - File names in results (inherits from `link`)
+- `periphery-linenumber-face` - Line numbers (inherits from `line-number`)
 - `periphery-message-face` - Message text
+- `periphery-first-sentence-face` - First sentence highlighting
 
-Note: `-full` variants include background colors for the severity badges.
+### Generating Faces with Backgrounds
+
+To get a face with an automatically generated background, use:
+
+```elisp
+(periphery--get-face-with-background 'periphery-error-face)
+;; Returns: (:foreground "#f38ba8" :background "#260026" :bold t :distant-foreground "#f38ba8")
+```
+
+Built-in helper functions that generate faces with backgrounds:
+- `periphery-parser--severity-face` - For ERROR/WARNING/INFO/NOTE keywords
+- `periphery-parser--todo-face` - For TODO/FIX/HACK/PERF/MARK keywords
+- `periphery-parser--match-face` - For search matches
 
 ## License
 MIT

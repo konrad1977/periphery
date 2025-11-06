@@ -325,8 +325,8 @@ FACE is the face to apply (defaults to periphery-identifier-face)."
 (defun periphery-remove-highlight-pattern (element)
   "Remove highlight pattern for ELEMENT."
   (interactive
-   (list (intern (completing-read "Remove pattern: " 
-                                  (mapcar #'symbol-name 
+   (list (intern (completing-read "Remove pattern: "
+                                  (mapcar #'symbol-name
                                           (mapcar #'car periphery-highlight-patterns))
                                   nil t))))
   ;; Remove from both alists
