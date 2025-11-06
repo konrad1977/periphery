@@ -57,15 +57,20 @@
   (open-current-line-with (tabulated-list-get-id)))
 
 (defun periphery--severity-priority (severity)
-  "Return numeric priority for SEVERITY (lower number = higher priority)."
+  "Return numeric priority for SEVERITY (lower number = higher priority).
+Matches periphery-core--get-severity ordering."
   (if (not (stringp severity))
-      4  ; Default priority for non-strings
-    (let ((type (downcase (string-trim severity))))
+      8  ; Default priority for non-strings
+    (let ((type (downcase (string-trim (substring-no-properties severity)))))
       (cond
-       ((string-prefix-p "error" type) 1)
-       ((string-prefix-p "warning" type) 2)
-       ((string-prefix-p "note" type) 3)
-       (t 4)))))
+       ((string-match-p "error" type) 1)
+       ((string-match-p "warning" type) 2)
+       ((string-match-p "hack" type) 3)
+       ((string-match-p "fixme\\|fix" type) 4)
+       ((string-match-p "perf\\|performance" type) 5)
+       ((string-match-p "todo" type) 6)
+       ((string-match-p "note\\|info" type) 7)
+       (t 8)))))
 
 (defun periphery--listing-command (errorList)
   "Create an ERRORLIST for the current mode, prioritizing errors."

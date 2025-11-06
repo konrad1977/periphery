@@ -117,10 +117,10 @@ background using `periphery-background-darkness'."
     (if bg-color
         (list :foreground fg-color
               :background bg-color
-              :bold t
+              :weight 'bold
               :distant-foreground fg-color)
       ;; Fallback if we can't get the foreground color
-      (list :inherit face-symbol :bold t))))
+      (list :inherit face-symbol :weight 'bold))))
 
 ;; Face definitions
 (defface periphery-filename-face
@@ -144,7 +144,7 @@ background using `periphery-background-darkness'."
   :group 'periphery)
 
 (defface periphery-message-face
-  '((t (:foreground "#fbfafb" :weight thin)))
+  '((t (:foreground "#fbfafb")))
   "Message face."
   :group 'periphery)
 
@@ -174,17 +174,17 @@ background using `periphery-background-darkness'."
   :group 'periphery)
 
 (defface periphery-todo-face
-  '((t (:foreground "#74c7ec" :weight normal)))
+  '((t (:foreground "#74c7ec")))
   "TODO face."
   :group 'periphery)
 
 (defface periphery-mark-face
-  '((t (:foreground "#9399b2" :weight light)))
+  '((t (:foreground "#9399b2")))
   "Mark face."
   :group 'periphery)
 
 (defface periphery-first-sentence-face
-  '((t (:foreground "#9399b2" :weight normal)))
+  '((t (:foreground "#9399b2")))
   "Face for the first sentence of the message (up to the first colon)."
   :group 'periphery)
 

@@ -50,6 +50,14 @@ QUERY is an optional search query for highlighting in search results."
            (periphery-core--remove-duplicate-paths periphery-core-error-list)))
 
     (when periphery-debug
+      (message "DEBUG: After sorting, first 10 entries:")
+      (dotimes (i (min 10 (length periphery-core-error-list)))
+        (let* ((entry (nth i periphery-core-error-list))
+               (type (string-trim (substring-no-properties (aref (cadr entry) 0))))
+               (severity (periphery-core--get-severity entry)))
+          (message "  %d. %s (severity: %d)" (1+ i) type severity))))
+
+    (when periphery-debug
       (message "Found %d errors" (length periphery-core-error-list)))
 
     ;; Call callback if provided
@@ -111,23 +119,29 @@ When duplicates are found, prefer entries with capitalized messages."
   "Sort RESULTS by severity and file."
   (sort results
         (lambda (a b)
-          (let ((severity-a (periphery-core--get-severity (car a)))
-                (severity-b (periphery-core--get-severity (car b))))
+          (let ((severity-a (periphery-core--get-severity a))
+                (severity-b (periphery-core--get-severity b)))
             (if (equal severity-a severity-b)
                 (string< (car a) (car b))
               (< severity-a severity-b))))))
 
 (defun periphery-core--get-severity (entry)
   "Get numeric severity from ENTRY for sorting.
-Errors = 1, Warnings = 2, Info = 3, etc."
-  (let ((type (downcase (or (ignore-errors (aref (cadr entry) 0)) ""))))
+Errors = 1, Warnings = 2, HACK = 3, FIXME = 4, PERF = 5, TODO = 6, NOTE = 7, etc."
+  (let* ((severity-str (or (ignore-errors (aref (cadr entry) 0)) ""))
+         ;; Strip text properties and trim whitespace
+         (type (downcase (string-trim (substring-no-properties severity-str)))))
+    (when periphery-debug
+      (message "DEBUG get-severity: raw='%s' type='%s'" severity-str type))
     (cond
      ((string-match-p "error" type) 1)
      ((string-match-p "warning" type) 2)
-     ((string-match-p "fixme\\|fix" type) 3)
-     ((string-match-p "todo" type) 4)
-     ((string-match-p "note\\|info" type) 5)
-     (t 6))))
+     ((string-match-p "hack" type) 3)
+     ((string-match-p "fixme\\|fix" type) 4)
+     ((string-match-p "perf\\|performance" type) 5)
+     ((string-match-p "todo" type) 6)
+     ((string-match-p "note\\|info" type) 7)
+     (t 8))))
 
 ;;;###autoload
 (cl-defun periphery-core-build-entry (&key path file line column 
