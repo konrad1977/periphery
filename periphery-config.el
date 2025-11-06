@@ -12,6 +12,116 @@
   "Configuration for periphery parser system."
   :group 'periphery)
 
+;;; Customizable variables
+
+(defcustom periphery-background-darkness 85
+  "Percentage to darken foreground colors for backgrounds.
+Higher values create darker backgrounds (85 means 85% darker).
+Used when generating background colors from foreground colors."
+  :type 'integer
+  :group 'periphery-config)
+
+(defcustom periphery-use-theme-colors t
+  "When non-nil, use theme colors for error, warning, and info faces.
+When nil, use the default Catppuccin colors."
+  :type 'boolean
+  :group 'periphery-config)
+
+;;; Color utility functions
+
+(defvar periphery--color-cache (make-hash-table :test 'equal)
+  "Cache for computed colors to avoid repeated calculations.")
+
+(defun periphery--get-cached-color (cache-key color-fn &rest args)
+  "Get color from cache or compute and cache it using COLOR-FN with ARGS.
+CACHE-KEY is used to store and retrieve the computed color."
+  (or (gethash cache-key periphery--color-cache)
+      (puthash cache-key (apply color-fn args) periphery--color-cache)))
+
+(defun periphery--clear-color-cache ()
+  "Clear the color cache.
+Call this after changing theme or color customization variables."
+  (interactive)
+  (clrhash periphery--color-cache))
+
+(defun periphery--color-to-rgb (color)
+  "Convert COLOR (hex or name) to RGB components (0-255)."
+  (let ((cache-key (format "rgb-%s" color)))
+    (periphery--get-cached-color
+     cache-key
+     (lambda (c)
+       (let ((rgb (color-values c)))
+         (if rgb
+             (mapcar (lambda (x) (/ x 256)) rgb)
+           (error "Invalid color: %s" c))))
+     color)))
+
+(defun periphery--rgb-to-hex (r g b)
+  "Convert R G B components (0-255) to hex color string."
+  (format "#%02x%02x%02x"
+          (min 255 (max 0 (floor r)))
+          (min 255 (max 0 (floor g)))
+          (min 255 (max 0 (floor b)))))
+
+(defun periphery--darken-color (color percent)
+  "Darken COLOR by PERCENT (0-100).
+100 percent means completely black, 0 means no change."
+  (let ((cache-key (format "darken-%s-%d" color percent)))
+    (periphery--get-cached-color
+     cache-key
+     (lambda (c p)
+       (let* ((rgb (periphery--color-to-rgb c))
+              (darkened (mapcar (lambda (component)
+                                  (* component (- 100 p) 0.01))
+                                rgb)))
+         (apply #'periphery--rgb-to-hex darkened)))
+     color percent)))
+
+(defun periphery--get-theme-face-color (face-name attribute &optional fallback)
+  "Get color for FACE-NAME's ATTRIBUTE from current theme.
+If not found, return FALLBACK color."
+  (let ((color (face-attribute face-name attribute nil t)))
+    (if (or (eq color 'unspecified) (not color))
+        fallback
+      color)))
+
+(defun periphery--create-background-from-foreground (fg-color &optional darkness)
+  "Create a darker background color from FG-COLOR.
+DARKNESS is the percentage to darken (default `periphery-background-darkness').
+Higher values create darker backgrounds."
+  (let* ((darkness (or darkness periphery-background-darkness))
+         (cache-key (format "bg-%s-%d" fg-color darkness)))
+    (periphery--get-cached-color
+     cache-key
+     (lambda (fg d)
+       (periphery--darken-color fg d))
+     fg-color darkness)))
+
+(defun periphery--get-face-colors (face-keyword &optional theme-face fallback-fg)
+  "Get foreground and background colors for FACE-KEYWORD.
+THEME-FACE is the theme face to query when `periphery-use-theme-colors' is non-nil.
+FALLBACK-FG is the fallback foreground color.
+Returns a cons cell (FG-COLOR . BG-COLOR)."
+  (let ((fg (if (and periphery-use-theme-colors theme-face)
+                (periphery--get-theme-face-color theme-face :foreground fallback-fg)
+              fallback-fg)))
+    (cons fg (periphery--create-background-from-foreground fg))))
+
+(defun periphery--get-face-with-background (face-symbol)
+  "Create a face specification with background from FACE-SYMBOL.
+Takes the foreground color from FACE-SYMBOL and generates a darker
+background using `periphery-background-darkness'."
+  (let* ((fg-color (face-attribute face-symbol :foreground nil t))
+         (bg-color (when (and fg-color (not (eq fg-color 'unspecified)))
+                     (periphery--create-background-from-foreground fg-color))))
+    (if bg-color
+        (list :foreground fg-color
+              :background bg-color
+              :bold t
+              :distant-foreground fg-color)
+      ;; Fallback if we can't get the foreground color
+      (list :inherit face-symbol :bold t))))
+
 ;; Face definitions
 (defface periphery-filename-face
   '((t (:inherit link)))
@@ -28,24 +138,9 @@
   "Warning face."
   :group 'periphery)
 
-(defface periphery-warning-face-full
-  '((t (:foreground "#f9e2af" :bold t :background "#2E2A1E" :distant-foreground "#f9e2af")))
-  "Warning face."
-  :group 'periphery)
-
 (defface periphery-error-face
   '((t (:foreground "#f38ba8")))
   "Error face."
-  :group 'periphery)
-
-(defface periphery-error-face-full
-  '((t (:foreground "#f38ba8" :bold t :background "#2D1E28" :distant-foreground "#f38ba8")))
-  "Error face."
-  :group 'periphery)
-
-(defface periphery-identifier-face
-  '((t (:inherit periphery-error-face :background "#2D1E28")))
-  "Identifier face."
   :group 'periphery)
 
 (defface periphery-message-face
@@ -58,29 +153,14 @@
   "FIX|FIXME face."
   :group 'periphery)
 
-(defface periphery-fix-face-full
-  '((t (:foreground "#1B2431" :background "#89b4fa" :distant-foreground "#89b4fa")))
-  "FIX with background."
-  :group 'periphery)
-
 (defface periphery-note-face
-  '((t (:inherit compilation-info)))
-  "Info face."
-  :group 'periphery)
-
-(defface periphery-note-face-full
-  '((t (:foreground "#1E2B2E" :bold t :background "#a6e3a1" :distant-foreground "#a6e3a1")))
-  "Info face."
+  '((t (:foreground "#a6e3a1")))
+  "Info/Note face."
   :group 'periphery)
 
 (defface periphery-info-face
   '((t (:inherit periphery-note-face)))
-  "Note face."
-  :group 'periphery)
-
-(defface periphery-info-face-full
-  '((t (:inherit periphery-note-face-full)))
-  "Note face full."
+  "Info face (inherits from note)."
   :group 'periphery)
 
 (defface periphery-performance-face
@@ -88,29 +168,19 @@
   "Performance face."
   :group 'periphery)
 
-(defface periphery-performance-face-full
-  '((t (:foreground "#2B1E2E" :bold t :background "#cba6f7" :distant-foreground "#cba6f7" )))
-  "Performance face."
-  :group 'periphery)
-
-(defface periphery-hack-face-full
-  '((t (:foreground "#28181C" :bold t :background "#f38ba8" :distant-foreground  "#f38ba8")))
-  "Performance face."
+(defface periphery-hack-face
+  '((t (:foreground "#f38ba8")))
+  "Hack face."
   :group 'periphery)
 
 (defface periphery-todo-face
   '((t (:foreground "#74c7ec" :weight normal)))
-  "Performance face."
+  "TODO face."
   :group 'periphery)
 
-(defface periphery-todo-face-full
-  '((t (:foreground "#182A32" :background "#74c7ec" :distant-foreground  "#74c7ec" :weight normal)))
-  "Performance face."
-  :group 'periphery)
-
-(defface periphery-mark-face-full
-  '((t (:foreground "#313244" :background "#9399b2" :distant-foreground "#9399b2" :weight light)))
-  "Performance face."
+(defface periphery-mark-face
+  '((t (:foreground "#9399b2" :weight light)))
+  "Mark face."
   :group 'periphery)
 
 (defface periphery-first-sentence-face
@@ -364,8 +434,9 @@ FACE is the face to apply (defaults to periphery-identifier-face)."
   nil) ; Placeholder
 
 (defun periphery--face-from-severity (severity)
-  "Get face for given SEVERITY level."
-  (intern (format "periphery-%s-face-full" (downcase severity))))
+  "Get face with background for given SEVERITY level."
+  (let ((base-face (intern (format "periphery-%s-face" (downcase severity)))))
+    (periphery--get-face-with-background base-face)))
 
 (defun periphery--face-from-match-type (type)
   "Get face for given match TYPE."

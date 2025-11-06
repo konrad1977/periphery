@@ -186,26 +186,30 @@
     text))
 
 (defun periphery-parser--severity-face (severity)
-  "Get face for SEVERITY."
-  (let ((type (upcase (string-trim severity))))
-    (cond
-     ((string-match-p "ERROR\\|FAILED" type) 'periphery-error-face-full)
-     ((string-match-p "WARNING" type) 'periphery-warning-face-full)
-     ((string-match-p "NOTE\\|INFO" type) 'periphery-note-face-full)
-     ((string-match-p "MATCH" type) 'periphery-warning-face-full)
-     (t 'periphery-info-face-full))))
+  "Get face with background for SEVERITY."
+  (let* ((type (upcase (string-trim severity)))
+         (base-face
+          (cond
+           ((string-match-p "ERROR\\|FAILED" type) 'periphery-error-face)
+           ((string-match-p "WARNING" type) 'periphery-warning-face)
+           ((string-match-p "NOTE\\|INFO" type) 'periphery-note-face)
+           ((string-match-p "MATCH" type) 'periphery-warning-face)
+           (t 'periphery-info-face))))
+    (periphery--get-face-with-background base-face)))
 
 (defun periphery-parser--todo-face (keyword)
-  "Get face for TODO KEYWORD (full face with background)."
-  (let ((type (upcase keyword)))
-    (cond
-     ((string= type "TODO") 'periphery-todo-face-full)
-     ((string-match-p "FIX\\|FIXME" type) 'periphery-fix-face-full)
-     ((string= type "HACK") 'periphery-hack-face-full)
-     ((string= type "NOTE") 'periphery-note-face-full)
-     ((string= type "PERF") 'periphery-performance-face-full)
-     ((string= type "MARK") 'periphery-mark-face-full)
-     (t 'periphery-info-face-full))))
+  "Get face with background for TODO KEYWORD."
+  (let* ((type (upcase keyword))
+         (base-face
+          (cond
+           ((string= type "TODO") 'periphery-todo-face)
+           ((string-match-p "FIX\\|FIXME" type) 'periphery-fix-face)
+           ((string= type "HACK") 'periphery-hack-face)
+           ((string= type "NOTE") 'periphery-note-face)
+           ((string= type "PERF") 'periphery-performance-face)
+           ((string= type "MARK") 'periphery-mark-face)
+           (t 'periphery-info-face))))
+    (periphery--get-face-with-background base-face)))
 
 (defun periphery-parser--todo-message-face (keyword)
   "Get face for TODO KEYWORD message (no background, just foreground)."
@@ -220,8 +224,8 @@
      (t 'periphery-info-face))))
 
 (defun periphery-parser--match-face (_)
-  "Get face for search match."
-  'periphery-warning-face-full)
+  "Get face with background for search match."
+  (periphery--get-face-with-background 'periphery-warning-face))
 
 (defun periphery-parser--apply-highlighting (message)
   "Apply syntax highlighting to MESSAGE for strings, parentheses, etc."
