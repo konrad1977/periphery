@@ -57,20 +57,15 @@
   (open-current-line-with (tabulated-list-get-id)))
 
 (defun periphery--severity-priority (severity)
-  "Return numeric priority for SEVERITY (lower number = higher priority).
-Matches periphery-core--get-severity ordering."
+  "Return numeric priority for SEVERITY (lower number = higher priority)."
   (if (not (stringp severity))
-      8  ; Default priority for non-strings
-    (let ((type (downcase (string-trim (substring-no-properties severity)))))
+      4  ; Default priority for non-strings
+    (let ((type (downcase (string-trim severity))))
       (cond
-       ((string-match-p "error" type) 1)
-       ((string-match-p "warning" type) 2)
-       ((string-match-p "hack" type) 3)
-       ((string-match-p "fixme\\|fix" type) 4)
-       ((string-match-p "perf\\|performance" type) 5)
-       ((string-match-p "todo" type) 6)
-       ((string-match-p "note\\|info" type) 7)
-       (t 8)))))
+       ((string-prefix-p "error" type) 1)
+       ((string-prefix-p "warning" type) 2)
+       ((string-prefix-p "note" type) 3)
+       (t 4)))))
 
 (defun periphery--listing-command (errorList)
   "Create an ERRORLIST for the current mode, prioritizing errors."
@@ -127,8 +122,7 @@ Matches periphery-core--get-severity ordering."
                               "ERROR"
                             type)))
         (propertize (format " %s " (periphery--center-text display-type))
-                    'face (periphery--get-face-with-background
-                           (periphery--color-from-keyword severity))))))
+                    'face (periphery--full-color-from-keyword severity)))))
 
 (defun periphery--center-text (word)
   "Center WORD to default length."
@@ -154,10 +148,18 @@ Matches periphery-core--get-severity ordering."
       (_ 'periphery-error-face))))
 
 (defun periphery--full-color-from-keyword (keyword)
-  "Get face with background from KEYWORD.
-Returns a face specification (plist) with dynamically generated background."
-  (periphery--get-face-with-background
-   (periphery--color-from-keyword keyword)))
+  "Get full color face from KEYWORD."
+  (let ((type (upcase (string-trim-left keyword))))
+    (pcase type
+      ((or "WARNING" "MATCH") 'periphery-warning-face-full)
+      ("INFO" 'periphery-note-face-full)
+      ("ERROR" 'periphery-error-face-full)
+      ("NOTE" 'periphery-note-face-full)
+      ((or "FIX" "FIXME") 'periphery-fix-face-full)
+      ((or "PERF" "PERFORMANCE") 'periphery-performance-face-full)
+      ("TODO" 'periphery-todo-face-full)
+      ("HACK" 'periphery-hack-face-full)
+      (_ 'periphery-error-face-full))))
 
 (cl-defun periphery--mark-all-symbols (&key input regex property)
   "Highlight all quoted symbols (as INPUT REGEX PROPERTY)."
@@ -490,17 +492,15 @@ CONFIG can be:
 
 ;;;###autoload
 (defun svg-color-from-tag (tag)
-  "Get face with background from TAG."
-  (let* ((base-face
-          (cond
-           ((string-match-p "TODO" tag) 'periphery-todo-face)
-           ((string-match-p "NOTE:" tag) 'periphery-note-face)
-           ((string-match-p "HACK" tag) 'periphery-hack-face)
-           ((string-match-p "PERF" tag) 'periphery-performance-face)
-           ((string-match-p "FIXME\\|FIX" tag) 'periphery-fix-face)
-           ((string-match-p "MARK" tag) 'periphery-mark-face)
-           (t 'periphery-hack-face))))
-    (periphery--get-face-with-background base-face)))
+  "Get color from (as TAG)."
+  (cond
+   ((string-match-p "TODO" tag) 'periphery-todo-face-full)
+   ((string-match-p "NOTE:" tag) 'periphery-note-face-full)
+   ((string-match-p "HACK" tag) 'periphery-hack-face-full)
+   ((string-match-p "PERF" tag) 'periphery-performance-face-full)
+   ((string-match-p "FIXME\\|FIX" tag) 'periphery-fix-face-full)
+   ((string-match-p "MARK" tag) 'periphery-mark-face-full)
+   (t 'periphery-hack-face-full)))
 
 ;;;###autoload
 (defun periphery--remove-leading-keyword (tag)
@@ -531,10 +531,9 @@ CONFIG can be:
                                                           (let* ((parts (split-string tag ":" t))
                                                                  (action (nth 1 parts))
                                                                  (text (string-join (cddr parts) " "))
-                                                                 (base-face (if (string= action "enable")
-                                                                                'periphery-hack-face
-                                                                              'periphery-fix-face))
-                                                                 (face (periphery--get-face-with-background base-face)))
+                                                                 (face (if (string= action "enable")
+                                                                      'periphery-hack-face-full
+                                                                    'periphery-fix-face-full)))
                                                             (svg-tag-make text :face face :crop-left t)
                                                             (svg-tag-make action :face face :inverse t)
                                                             ))))))

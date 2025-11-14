@@ -44,18 +44,10 @@ QUERY is an optional search query for highlighting in search results."
           (message "Applying parser: %s" parser-id))
         (periphery-core--apply-parser input config query)))
 
-    ;; Remove duplicates (based on path, not full content) and sort
+    ;; Remove duplicates and sort
     (setq periphery-core-error-list
           (periphery-core--sort-results
-           (periphery-core--remove-duplicate-paths periphery-core-error-list)))
-
-    (when periphery-debug
-      (message "DEBUG: After sorting, first 10 entries:")
-      (dotimes (i (min 10 (length periphery-core-error-list)))
-        (let* ((entry (nth i periphery-core-error-list))
-               (type (string-trim (substring-no-properties (aref (cadr entry) 0))))
-               (severity (periphery-core--get-severity entry)))
-          (message "  %d. %s (severity: %d)" (1+ i) type severity))))
+           (delete-dups periphery-core-error-list)))
 
     (when periphery-debug
       (message "Found %d errors" (length periphery-core-error-list)))
@@ -88,60 +80,27 @@ Optional QUERY is passed to the parser function if it accepts it."
               (message "    -> Got result!"))
             (push result periphery-core-error-list)))))))
 
-(defun periphery-core--remove-duplicate-paths (results)
-  "Remove duplicate entries from RESULTS based on path (first element).
-When duplicates are found, prefer entries with capitalized messages."
-  (let ((seen (make-hash-table :test 'equal))
-        (unique '()))
-    (dolist (entry results)
-      (let* ((path (car entry))
-             (existing (gethash path seen)))
-        (if existing
-            ;; If we've seen this path, keep the one with better capitalization
-            (let* ((existing-msg (aref (cadr existing) 3))
-                   (new-msg (aref (cadr entry) 3))
-                   ;; Prefer messages that start with uppercase
-                   (prefer-new (and (> (length new-msg) 0)
-                                   (> (length existing-msg) 0)
-                                   (let ((new-first (substring new-msg 0 1))
-                                         (existing-first (substring existing-msg 0 1)))
-                                     (and (string= (upcase new-first) new-first)
-                                          (string= (downcase existing-first) existing-first))))))
-              (when prefer-new
-                (puthash path entry seen)))
-          ;; First time seeing this path
-          (puthash path entry seen))))
-    ;; Extract all unique entries from hash table
-    (maphash (lambda (_path entry) (push entry unique)) seen)
-    unique))
-
 (defun periphery-core--sort-results (results)
   "Sort RESULTS by severity and file."
   (sort results
         (lambda (a b)
-          (let ((severity-a (periphery-core--get-severity a))
-                (severity-b (periphery-core--get-severity b)))
+          (let ((severity-a (periphery-core--get-severity (car a)))
+                (severity-b (periphery-core--get-severity (car b))))
             (if (equal severity-a severity-b)
                 (string< (car a) (car b))
               (< severity-a severity-b))))))
 
 (defun periphery-core--get-severity (entry)
   "Get numeric severity from ENTRY for sorting.
-Errors = 1, Warnings = 2, HACK = 3, FIXME = 4, PERF = 5, TODO = 6, NOTE = 7, etc."
-  (let* ((severity-str (or (ignore-errors (aref (cadr entry) 0)) ""))
-         ;; Strip text properties and trim whitespace
-         (type (downcase (string-trim (substring-no-properties severity-str)))))
-    (when periphery-debug
-      (message "DEBUG get-severity: raw='%s' type='%s'" severity-str type))
+Errors = 1, Warnings = 2, Info = 3, etc."
+  (let ((type (downcase (or (ignore-errors (aref (cadr entry) 0)) ""))))
     (cond
      ((string-match-p "error" type) 1)
      ((string-match-p "warning" type) 2)
-     ((string-match-p "hack" type) 3)
-     ((string-match-p "fixme\\|fix" type) 4)
-     ((string-match-p "perf\\|performance" type) 5)
-     ((string-match-p "todo" type) 6)
-     ((string-match-p "note\\|info" type) 7)
-     (t 8))))
+     ((string-match-p "fixme\\|fix" type) 3)
+     ((string-match-p "todo" type) 4)
+     ((string-match-p "note\\|info" type) 5)
+     (t 6))))
 
 ;;;###autoload
 (cl-defun periphery-core-build-entry (&key path file line column 

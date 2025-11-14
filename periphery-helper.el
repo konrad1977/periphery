@@ -120,8 +120,8 @@
      ((or (string-match-p "^/Applications/Xcode.app" data)
           (string-match-p "swift-frontend" data)
           (string= data "_Build Failure"))
-      (message "Cannot open file for build failure or command: %s"
-               (if (> (length data) 100)
+      (message "Cannot open file for build failure or command: %s" 
+               (if (> (length data) 100) 
                    (concat (substring data 0 100) "...")
                  data)))
      ;; Normal file path handling
@@ -131,10 +131,7 @@
              (when-let* ((file (match-string 1 data))
                         (linenumber (string-to-number (match-string 2 data)))
                         (column (match-string 3 data))
-                        ;; Use the stored search project root if available, otherwise use current project root
-                        (project-root (or (and (boundp 'periphery-search:project-root)
-                                              periphery-search:project-root)
-                                         (periphery-helper:project-root-dir)))
+                        (project-root (periphery-helper:project-root-dir))
                         (full-file-path (if (file-name-absolute-p file)
                                             file
                                           (expand-file-name file project-root))))
@@ -148,7 +145,7 @@
                            (when (> columnnumber 0)
                              (forward-char (1- columnnumber)))))
                      (recenter))
-                 (message "File not found: %s (project-root: %s)" full-file-path project-root)))))))))
+                 (message "File not found: %s" full-file-path)))))))))
 
 (cl-defun async-shell-command-to-string (&key process-name &key command &key callback)
   "Execute shell command COMMAND asynchronously in the background.

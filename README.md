@@ -41,7 +41,7 @@ Emacs 30 includes built-in support for installing packages directly from Git rep
   :vc (:url "https://github.com/konrad1977/periphery"
        :rev :newest)
   :custom
-  ;; Adjust background darkness (0-100, higher = darker background)
+  ;; Adjust severity badge background darkness (0-100, higher = darker)
   (periphery-background-darkness 85)
 
   ;; Use theme colors instead of default Catppuccin colors
@@ -75,9 +75,10 @@ Periphery now uses a smart color system that automatically generates background 
 
 #### Adjust Background Darkness
 
-Control how much darker the backgrounds should be compared to the text color:
+Control how much darker the severity badge backgrounds should be compared to the text color:
 
 ```elisp
+;; Severity badge backgrounds (ERROR, WARNING, etc.)
 ;; Default: 85% darker (darker backgrounds)
 (setq periphery-background-darkness 85)
 
@@ -133,7 +134,7 @@ Here's a comprehensive example showing all customization options:
        :rev :newest)
   :custom
   ;; Color system
-  (periphery-background-darkness 85 "Background darkness percentage")
+  (periphery-background-darkness 85 "Severity badge background darkness percentage")
   (periphery-use-theme-colors t "Use theme colors automatically")
 
   ;; Display options
@@ -449,6 +450,25 @@ Periphery uses a smart color system where backgrounds are automatically generate
 - `periphery-linenumber-face` - Line numbers (inherits from `line-number`)
 - `periphery-message-face` - Message text
 - `periphery-first-sentence-face` - First sentence highlighting
+- `periphery-identifier-face` - Identifiers in quotes and code elements (inherits from `font-lock-type-face`)
+
+### Customizing Identifier Highlighting
+
+To add a background color to identifiers in quotes (like `'self'`, `'subscribeToUpdates'`):
+
+```elisp
+(custom-set-faces
+ '(periphery-identifier-face ((t (:foreground "#7AA89F" :background "#2a3f3b" :weight bold)))))
+```
+
+Or using `set-face-attribute`:
+
+```elisp
+(set-face-attribute 'periphery-identifier-face nil
+                    :foreground "#7AA89F"
+                    :background "#2a3f3b"
+                    :weight 'bold)
+```
 
 ### Generating Faces with Backgrounds
 

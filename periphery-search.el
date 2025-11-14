@@ -10,8 +10,6 @@
 
 (defvar current-query "")
 (defvar periphery-quick:debug nil)
-(defvar periphery-search:project-root nil
-  "Stores the project root directory from where the last search was executed.")
 
 (defun run-async-command (command callback)
   "Run COMMAND asynchronously and call CALLBACK with the result."
@@ -31,14 +29,11 @@
     (setq current-query nil)
     (if (executable-find "rg")
         (let ((default-directory (periphery-helper:project-root-dir)))
-          ;; Store the project root for later use when opening files
-          (setq periphery-search:project-root default-directory)
           (setq current-query (regexp-quote text))
           (let ((command (format "%s \"%s\" --color=never --no-heading --with-filename --line-number --column --sort path"
                                  searcher current-query)))
             (when periphery-quick:debug
-              (message "Running command: %s" command)
-              (message "Project root set to: %s" periphery-search:project-root))
+              (message "Running command: %s" command))
             (run-async-command command
                                (lambda (result)
                                  (when periphery-quick:debug

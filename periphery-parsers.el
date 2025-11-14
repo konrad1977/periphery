@@ -186,30 +186,26 @@
     text))
 
 (defun periphery-parser--severity-face (severity)
-  "Get face with background for SEVERITY."
-  (let* ((type (upcase (string-trim severity)))
-         (base-face
-          (cond
-           ((string-match-p "ERROR\\|FAILED" type) 'periphery-error-face)
-           ((string-match-p "WARNING" type) 'periphery-warning-face)
-           ((string-match-p "NOTE\\|INFO" type) 'periphery-note-face)
-           ((string-match-p "MATCH" type) 'periphery-warning-face)
-           (t 'periphery-info-face))))
-    (periphery--get-face-with-background base-face)))
+  "Get face for SEVERITY."
+  (let ((type (upcase (string-trim severity))))
+    (cond
+     ((string-match-p "ERROR\\|FAILED" type) 'periphery-error-face-full)
+     ((string-match-p "WARNING" type) 'periphery-warning-face-full)
+     ((string-match-p "NOTE\\|INFO" type) 'periphery-note-face-full)
+     ((string-match-p "MATCH" type) 'periphery-warning-face-full)
+     (t 'periphery-info-face-full))))
 
 (defun periphery-parser--todo-face (keyword)
-  "Get face with background for TODO KEYWORD."
-  (let* ((type (upcase keyword))
-         (base-face
-          (cond
-           ((string= type "TODO") 'periphery-todo-face)
-           ((string-match-p "FIX\\|FIXME" type) 'periphery-fix-face)
-           ((string= type "HACK") 'periphery-hack-face)
-           ((string= type "NOTE") 'periphery-note-face)
-           ((string= type "PERF") 'periphery-performance-face)
-           ((string= type "MARK") 'periphery-mark-face)
-           (t 'periphery-info-face))))
-    (periphery--get-face-with-background base-face)))
+  "Get face for TODO KEYWORD (full face with background)."
+  (let ((type (upcase keyword)))
+    (cond
+     ((string= type "TODO") 'periphery-todo-face-full)
+     ((string-match-p "FIX\\|FIXME" type) 'periphery-fix-face-full)
+     ((string= type "HACK") 'periphery-hack-face-full)
+     ((string= type "NOTE") 'periphery-note-face-full)
+     ((string= type "PERF") 'periphery-performance-face-full)
+     ((string= type "MARK") 'periphery-mark-face-full)
+     (t 'periphery-info-face-full))))
 
 (defun periphery-parser--todo-message-face (keyword)
   "Get face for TODO KEYWORD message (no background, just foreground)."
@@ -224,8 +220,8 @@
      (t 'periphery-info-face))))
 
 (defun periphery-parser--match-face (_)
-  "Get face with background for search match."
-  (periphery--get-face-with-background 'periphery-warning-face))
+  "Get face for search match."
+  'periphery-warning-face-full)
 
 (defun periphery-parser--apply-highlighting (message)
   "Apply syntax highlighting to MESSAGE for strings, parentheses, etc."
@@ -339,6 +335,25 @@
    :type :compiler
    :priority 95
    :parse-fn #'periphery-parser-cdtool
+   :face-fn #'periphery-parser--severity-face)
+
+  (periphery-register-parser
+   'xcodebuild-error
+   :name "Xcodebuild Errors"
+   :regex "^xcodebuild: error:"
+   :type :compiler
+   :priority 98
+   :parse-fn #'periphery-parser-xcodebuild-error
+   :filter-fn #'periphery-parser-xcodebuild-error-filter
+   :face-fn #'periphery-parser--severity-face)
+
+  (periphery-register-parser
+   'device-error
+   :name "Device/Platform Errors"
+   :regex "error:.*iOS [0-9.]+ is not installed"
+   :type :compiler
+   :priority 97
+   :parse-fn #'periphery-parser-device-error
    :face-fn #'periphery-parser--severity-face))
 
 ;; Package/Build Error Parsers
@@ -401,6 +416,74 @@
      :line "999"
      :severity "error"
      :message input
+     :face-fn #'periphery-parser--severity-face)))
+
+;;;###autoload
+(defun periphery-parser-xcodebuild-error-filter (input)
+  "Filter INPUT to combine multi-line xcodebuild errors into single lines."
+  (let ((lines (split-string input "\n"))
+        (result '())
+        (current-error nil))
+    (dolist (line lines)
+      (cond
+       ;; Start of xcodebuild error
+       ((string-match "^xcodebuild: error: " line)
+        ;; If we had a previous error, save it
+        (when current-error
+          (push current-error result))
+        ;; Start accumulating new error
+        (setq current-error line))
+
+       ;; Continuation line (starts with whitespace) or empty line while accumulating
+       ((and current-error
+             (or (string-match "^[[:space:]]+" line)
+                 (string-empty-p line)))
+        ;; Append to current error with newline preserved
+        (setq current-error (concat current-error "\n" line)))
+
+       ;; Any other non-empty line that doesn't start with whitespace
+       ((not (string-empty-p line))
+        ;; If we were accumulating, save it
+        (when current-error
+          (push current-error result)
+          (setq current-error nil))
+        ;; Add the current line
+        (push line result))
+
+       ;; Empty line when not accumulating
+       (t
+        (push line result))))
+
+    ;; Don't forget the last error if still accumulating
+    (when current-error
+      (push current-error result))
+
+    ;; Return reconstructed input
+    (string-join (nreverse result) "\n")))
+
+;;;###autoload
+(defun periphery-parser-xcodebuild-error (input)
+  "Parse xcodebuild errors from INPUT."
+  (when (string-match "^xcodebuild: error: " input)
+    (let ((message (substring input (match-end 0))))
+      (periphery-core-build-entry
+       :path "Xcode Build"
+       :file "Xcode Build Configuration"
+       :line "1"
+       :severity "error"
+       :message message
+       :face-fn #'periphery-parser--severity-face))))
+
+;;;###autoload
+(defun periphery-parser-device-error (input)
+  "Parse device/platform error messages from INPUT."
+  (when (string-match "error:\\s*\\(iOS [0-9.]+ is not installed\\..*\\)" input)
+    (periphery-core-build-entry
+     :path "Xcode Components"
+     :file "Xcode Build Configuration"
+     :line "1"
+     :severity "error"
+     :message (match-string 1 input)
      :face-fn #'periphery-parser--severity-face)))
 
 ;; Auto-initialize on load
