@@ -354,6 +354,24 @@
    :type :compiler
    :priority 97
    :parse-fn #'periphery-parser-device-error
+   :face-fn #'periphery-parser--severity-face)
+
+  (periphery-register-parser
+   'project-error
+   :name "Project-level Errors"
+   :regex "\\.xcodeproj: error:"
+   :type :compiler
+   :priority 96
+   :parse-fn #'periphery-parser-project-error
+   :face-fn #'periphery-parser--severity-face)
+
+  (periphery-register-parser
+   'build-warning
+   :name "Build Warnings"
+   :regex "^\\(warning\\|note\\): "
+   :type :compiler
+   :priority 85
+   :parse-fn #'periphery-parser-build-warning
    :face-fn #'periphery-parser--severity-face))
 
 ;; Package/Build Error Parsers
@@ -485,6 +503,34 @@
      :severity "error"
      :message (match-string 1 input)
      :face-fn #'periphery-parser--severity-face)))
+
+;;;###autoload
+(defun periphery-parser-project-error (input)
+  "Parse project-level errors from INPUT (e.g., .xcodeproj: error: ...)."
+  (when (string-match "\\(/[^:]+\\.xcodeproj\\): error: \\(.*\\)" input)
+    (let ((project-file (match-string 1 input))
+          (message (match-string 2 input)))
+      (periphery-core-build-entry
+       :path project-file
+       :file (file-name-nondirectory project-file)
+       :line "1"
+       :severity "error"
+       :message message
+       :face-fn #'periphery-parser--severity-face))))
+
+;;;###autoload
+(defun periphery-parser-build-warning (input)
+  "Parse build-level warnings/notes from INPUT (e.g., warning: ..., note: ...)."
+  (when (string-match "^\\(warning\\|note\\): \\(.*\\)" input)
+    (let ((severity (match-string 1 input))
+          (message (match-string 2 input)))
+      (periphery-core-build-entry
+       :path "Build System"
+       :file "Xcode Build"
+       :line "1"
+       :severity severity
+       :message message
+       :face-fn #'periphery-parser--severity-face))))
 
 ;; Auto-initialize on load
 (periphery-parsers-initialize)
