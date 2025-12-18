@@ -465,9 +465,18 @@ Periphery uses a smart color system where backgrounds are automatically generate
 - `periphery-first-sentence-face` - First sentence highlighting
 - `periphery-identifier-face` - Identifiers in quotes and code elements (inherits from `font-lock-type-face`)
 
+### Built-in Syntax Highlighting
+
+Periphery automatically highlights code elements in error messages:
+
+- **Single quotes**: `'identifier'` - highlighted with `periphery-identifier-face`
+- **Double quotes**: `"string"` - highlighted with `periphery-identifier-face`
+- **Backticks**: `` `code` `` - highlighted with `periphery-identifier-face` (common in Xcode build output)
+- **Parentheses**: `()` - highlighted for visual clarity
+
 ### Customizing Identifier Highlighting
 
-To add a background color to identifiers in quotes (like `'self'`, `'subscribeToUpdates'`):
+To add a background color to identifiers in quotes (like `'self'`, `` `subscribeToUpdates` ``):
 
 ```elisp
 (custom-set-faces
