@@ -161,17 +161,50 @@
       ("HACK" 'periphery-hack-face-full)
       (_ 'periphery-error-face-full))))
 
+(defvar periphery--highlight-buffer nil
+  "Reusable buffer for highlighting operations.")
+
 (cl-defun periphery--mark-all-symbols (&key input regex property)
-  "Highlight all quoted symbols (as INPUT REGEX PROPERTY)."
-  (with-temp-buffer
+  "Highlight all quoted symbols (as INPUT REGEX PROPERTY).
+Uses a reusable buffer to avoid creating/killing buffers repeatedly."
+  (unless (buffer-live-p periphery--highlight-buffer)
+    (setq periphery--highlight-buffer (get-buffer-create " *periphery-highlight*")))
+  (with-current-buffer periphery--highlight-buffer
+    (erase-buffer)
     (insert input)
     (goto-char (point-min))
     (while (re-search-forward regex nil t)
       (let ((match-start (match-beginning 0))
             (match-end (match-end 0)))
-        (when (< match-start match-end)  ; Ensure non-zero-width match
+        (when (< match-start match-end)
           (add-text-properties match-start match-end property)
-          (goto-char match-end))))  ; Move point past the match
+          (goto-char match-end))))
+    (buffer-string)))
+
+(defun periphery--apply-all-highlights (input patterns)
+  "Apply all PATTERNS to INPUT in a single buffer operation.
+PATTERNS is a list of (regex . property) cons cells.
+If the regex has a capture group, highlights group 1; otherwise highlights group 0.
+Much faster than calling periphery--mark-all-symbols multiple times."
+  (unless (buffer-live-p periphery--highlight-buffer)
+    (setq periphery--highlight-buffer (get-buffer-create " *periphery-highlight*")))
+  (with-current-buffer periphery--highlight-buffer
+    (erase-buffer)
+    (insert input)
+    ;; Apply all patterns in sequence without copying buffer contents
+    (dolist (pattern patterns)
+      (let ((regex (car pattern))
+            (property (cdr pattern)))
+        (when regex
+          (goto-char (point-min))
+          (while (re-search-forward regex nil t)
+            ;; Use group 1 if it exists, otherwise group 0
+            (let* ((group (if (match-beginning 1) 1 0))
+                   (match-start (match-beginning group))
+                   (match-end (match-end group)))
+              (when (and match-start match-end (< match-start match-end))
+                (add-text-properties match-start match-end property)
+                (goto-char (match-end 0))))))))  ; Always advance past full match
     (buffer-string)))
 
 (defun parse-missing-package-product (buffer)

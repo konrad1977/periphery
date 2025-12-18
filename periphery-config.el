@@ -216,7 +216,10 @@ ENABLED determines if parser is active (default t)."
     (quote-marks . "\\('\\)")
     (quote-content . "'\\([^']+\\)'")
     (string-marks . "\\(\"\\)")
-    (string-content . "\"\\([^\"]+\\)\""))
+    (string-content . "\"\\([^\"]+\\)\"")
+    ;; Backtick patterns (used by Xcode build warnings)
+    (backtick-marks . "\\(`\\)")
+    (backtick-content . "`\\([^`]+\\)`"))
   "Regex patterns for syntax highlighting in messages.
 Each entry is (ELEMENT . PATTERN) where ELEMENT is the syntax element
 and PATTERN is the regex to match it."
@@ -230,7 +233,9 @@ and PATTERN is the regex to match it."
     (quote-content . periphery-identifier-face)
     (quote-marks . periphery-identifier-face)
     (string-content . periphery-identifier-face)
-    (string-marks . periphery-identifier-face))
+    (string-marks . periphery-identifier-face)
+    (backtick-content . periphery-identifier-face)
+    (backtick-marks . periphery-identifier-face))
   "Face configuration for syntax highlighting in error messages.
 Each entry is (ELEMENT . FACE) where ELEMENT is the syntax element
 and FACE is the face to apply."

@@ -422,11 +422,24 @@ Here's a complete example showing all steps:
 
 Periphery includes parsers for:
 
+### Compiler & Build
 - **Compiler**: Xcode/Swift compiler errors and warnings
-- **XCTest**: Xcode test results
-- **Search**: Generic search results with TODO/FIXME detection
-- **Ktlint**: Kotlin linter output
+- **Project Error**: Project-level errors from `.xcodeproj` files
+- **Build Warning**: Build-level warnings and notes from Xcode
+- **Device Error**: Device-specific build errors
+- **Core Data**: Core Data model compilation errors
+- **Package Error**: Swift Package Manager errors
+- **Xcodebuild Error**: General xcodebuild errors
+
+### Testing
+- **XCTest**: Xcode test results and failures
+
+### Linters
 - **SwiftLint**: Swift linter output
+- **Ktlint**: Kotlin linter output
+
+### Search
+- **Search**: Generic search results with TODO/FIXME/HACK/PERF/MARK detection
 
 ## Available Faces
 
