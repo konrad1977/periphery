@@ -44,10 +44,14 @@ QUERY is an optional search query for highlighting in search results."
           (message "Applying parser: %s" parser-id))
         (periphery-core--apply-parser input config query)))
 
-    ;; Remove duplicates and sort
+    ;; Remove duplicates by path key (file:line:col) and sort
+    ;; Using cl-delete-duplicates with custom test since delete-dups
+    ;; uses `equal` which fails on propertized strings with different faces
     (setq periphery-core-error-list
           (periphery-core--sort-results
-           (delete-dups periphery-core-error-list)))
+           (cl-delete-duplicates periphery-core-error-list
+                                 :test (lambda (a b) (equal (car a) (car b)))
+                                 :from-end t)))
 
     (when periphery-debug
       (message "Found %d errors" (length periphery-core-error-list)))
@@ -81,26 +85,36 @@ Optional QUERY is passed to the parser function if it accepts it."
             (push result periphery-core-error-list)))))))
 
 (defun periphery-core--sort-results (results)
-  "Sort RESULTS by severity and file."
+  "Sort RESULTS by severity and file.
+Errors first, then warnings, then notes/info."
   (sort results
         (lambda (a b)
-          (let ((severity-a (periphery-core--get-severity (car a)))
-                (severity-b (periphery-core--get-severity (car b))))
-            (if (equal severity-a severity-b)
+          (let ((severity-a (periphery-core--get-severity a))
+                (severity-b (periphery-core--get-severity b)))
+            (if (= severity-a severity-b)
                 (string< (car a) (car b))
               (< severity-a severity-b))))))
 
+(defvar periphery-core--severity-cache (make-hash-table :test 'equal)
+  "Cache for severity string -> numeric priority lookups.")
+
 (defun periphery-core--get-severity (entry)
-  "Get numeric severity from ENTRY for sorting.
+  "Get numeric severity from ENTRY for sorting (cached).
 Errors = 1, Warnings = 2, Info = 3, etc."
-  (let ((type (downcase (or (ignore-errors (aref (cadr entry) 0)) ""))))
-    (cond
-     ((string-match-p "error" type) 1)
-     ((string-match-p "warning" type) 2)
-     ((string-match-p "fixme\\|fix" type) 3)
-     ((string-match-p "todo" type) 4)
-     ((string-match-p "note\\|info" type) 5)
-     (t 6))))
+  (let ((raw-type (ignore-errors (aref (cadr entry) 0))))
+    (if (null raw-type)
+        6
+      (or (gethash raw-type periphery-core--severity-cache)
+          (let* ((type (downcase raw-type))
+                 (priority (cond
+                            ((string-match-p "error" type) 1)
+                            ((string-match-p "warning" type) 2)
+                            ((string-match-p "fixme\\|fix" type) 3)
+                            ((string-match-p "todo" type) 4)
+                            ((string-match-p "note\\|info" type) 5)
+                            (t 6))))
+            (puthash raw-type priority periphery-core--severity-cache)
+            priority)))))
 
 ;;;###autoload
 (cl-defun periphery-core-build-entry (&key path file line column 
@@ -129,15 +143,12 @@ FACE-FN is a function to determine face from severity."
              (propertize message 'face 'periphery-message-face))))))
 
 (defun periphery-core--has-face-properties (string)
-  "Check if STRING has any face properties."
-  (let ((pos 0)
-        (len (length string))
-        (has-face nil))
-    (while (and (< pos len) (not has-face))
-      (when (get-text-property pos 'face string)
-        (setq has-face t))
-      (setq pos (1+ pos)))
-    has-face))
+  "Check if STRING has any face properties.
+Uses `next-single-property-change' for O(n) -> O(1) best-case performance."
+  (and (stringp string)
+       (> (length string) 0)
+       (or (get-text-property 0 'face string)
+           (next-single-property-change 0 'face string))))
 
 (defun periphery-core--propertize-severity (severity face)
   "Format and colorize SEVERITY with FACE."
@@ -148,15 +159,22 @@ FACE-FN is a function to determine face from severity."
     (propertize (format " %s " (periphery-core--center-text display))
                 'face face)))
 
+(defvar periphery-core--center-text-cache (make-hash-table :test 'equal)
+  "Cache for centered text results to avoid repeated computation.")
+
 (defun periphery-core--center-text (text)
-  "Center TEXT to standard width."
-  (let* ((target-width 8)
-         (text-width (string-width text))
-         (padding (/ (- target-width text-width) 2))
-         (result (concat (make-string padding ?\s) text)))
-    (while (< (string-width result) (1- target-width))
-      (setq result (concat result " ")))
-    result))
+  "Center TEXT to standard width (cached)."
+  (or (gethash text periphery-core--center-text-cache)
+      (let* ((target-width 8)
+             (text-width (string-width text))
+             (total-padding (- target-width text-width))
+             (left-padding (/ total-padding 2))
+             (right-padding (- total-padding left-padding 1))
+             (result (concat (make-string left-padding ?\s)
+                             text
+                             (make-string (max 0 right-padding) ?\s))))
+        (puthash text result periphery-core--center-text-cache)
+        result)))
 
 ;;;###autoload
 (defun periphery-core-run-async (input type callback)

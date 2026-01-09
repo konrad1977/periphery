@@ -22,6 +22,7 @@
                                   :text "No lint warning or errors."
                                   :attributes 'success))))
 
+;;;###autoload
 (defun periphery-run-swiftlint ()
   "Lint the whole project not just current file."
   (interactive)

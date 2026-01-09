@@ -187,15 +187,21 @@
        text t t)
     text))
 
+(defvar periphery-parser--severity-face-cache (make-hash-table :test 'equal)
+  "Cache for severity -> face lookups.")
+
 (defun periphery-parser--severity-face (severity)
-  "Get face for SEVERITY."
-  (let ((type (upcase (string-trim severity))))
-    (cond
-     ((string-match-p "ERROR\\|FAILED" type) 'periphery-error-face-full)
-     ((string-match-p "WARNING" type) 'periphery-warning-face-full)
-     ((string-match-p "NOTE\\|INFO" type) 'periphery-note-face-full)
-     ((string-match-p "MATCH" type) 'periphery-warning-face-full)
-     (t 'periphery-info-face-full))))
+  "Get face for SEVERITY (cached)."
+  (or (gethash severity periphery-parser--severity-face-cache)
+      (let* ((type (upcase (string-trim severity)))
+             (face (cond
+                    ((string-match-p "ERROR\\|FAILED" type) 'periphery-error-face-full)
+                    ((string-match-p "WARNING" type) 'periphery-warning-face-full)
+                    ((string-match-p "NOTE\\|INFO" type) 'periphery-note-face-full)
+                    ((string-match-p "MATCH" type) 'periphery-warning-face-full)
+                    (t 'periphery-info-face-full))))
+        (puthash severity face periphery-parser--severity-face-cache)
+        face)))
 
 (defun periphery-parser--todo-face (keyword)
   "Get face for TODO KEYWORD (full face with background)."
