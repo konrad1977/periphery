@@ -118,6 +118,11 @@
   "Face for the first sentence of the message (up to the first colon)."
   :group 'periphery)
 
+(defface periphery-string-content-face
+  '((t (:foreground "#9399b2" :slant italic)))
+  "Face for content inside double quotes - italic gray."
+  :group 'periphery)
+
 (defcustom periphery-parser-configs nil
   "Alist of parser configurations.
 Each entry is (PARSER-ID . PLIST) where PLIST contains:
@@ -208,21 +213,23 @@ ENABLED determines if parser is active (default t)."
     (cdr (assoc (completing-read prompt parsers nil t) parsers))))
 
 ;; Syntax highlighting configuration
+;; Typographic quotes: ' (U+2018), ' (U+2019), " (U+201C), " (U+201D)
+(defconst periphery--single-quotes "'''")
+(defconst periphery--double-quotes "\"\N{LEFT DOUBLE QUOTATION MARK}\N{RIGHT DOUBLE QUOTATION MARK}")
+
 (defcustom periphery-highlight-patterns
-  '((parentheses . "\\(\(.+?\)\\)")
-    (strings . "\\(\"[^\"]+\"\\)")
-    (quotes . "\\('[^']+'\\)")
+  `((parentheses . "\\(\(.+?\)\\)")
+    (strings . ,(format "\\([%s][^%s]+[%s]\\)" periphery--double-quotes periphery--double-quotes periphery--double-quotes))
+    (quotes . ,(format "\\([%s][^%s]+[%s]\\)" periphery--single-quotes periphery--single-quotes periphery--single-quotes))
     ;; Separate patterns for marks and content
-    (quote-marks . "\\('\\)")
-    (quote-content . "'\\([^']+\\)'")
-    (string-marks . "\\(\"\\)")
-    (string-content . "\"\\([^\"]+\\)\"")
-    ;; Backtick patterns (used by Xcode build warnings)
-    (backtick-marks . "\\(`\\)")
-    (backtick-content . "`\\([^`]+\\)`"))
+    (quote-marks . ,(format "\\([%s]\\)" periphery--single-quotes))
+    (quote-content . ,(format "[%s]\\([^%s]+\\)[%s]" periphery--single-quotes periphery--single-quotes periphery--single-quotes))
+    (string-marks . ,(format "\\([%s]\\)" periphery--double-quotes))
+    (string-content . ,(format "[%s]\\([^%s]+\\)[%s]" periphery--double-quotes periphery--double-quotes periphery--double-quotes)))
   "Regex patterns for syntax highlighting in messages.
 Each entry is (ELEMENT . PATTERN) where ELEMENT is the syntax element
-and PATTERN is the regex to match it."
+and PATTERN is the regex to match it.
+Includes both regular and typographic quotes."
   :type '(alist :key-type symbol :value-type string)
   :group 'periphery-config)
 
@@ -232,10 +239,8 @@ and PATTERN is the regex to match it."
     (quotes . highlight)
     (quote-content . periphery-identifier-face)
     (quote-marks . periphery-identifier-face)
-    (string-content . periphery-identifier-face)
-    (string-marks . periphery-identifier-face)
-    (backtick-content . periphery-identifier-face)
-    (backtick-marks . periphery-identifier-face))
+    (string-content . periphery-string-content-face)
+    (string-marks . periphery-string-content-face))
   "Face configuration for syntax highlighting in error messages.
 Each entry is (ELEMENT . FACE) where ELEMENT is the syntax element
 and FACE is the face to apply."

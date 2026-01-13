@@ -56,28 +56,34 @@
   (interactive)
   (open-current-line-with (tabulated-list-get-id)))
 
-(defvar periphery--severity-priority-cache (make-hash-table :test 'equal)
-  "Cache for severity priority lookups.")
-
 (defun periphery--severity-priority (severity)
-  "Return numeric priority for SEVERITY (lower number = higher priority).
-Results are cached for performance."
+  "Return numeric priority for SEVERITY (lower number = higher priority)."
   (if (not (stringp severity))
       4  ; Default priority for non-strings
-    (or (gethash severity periphery--severity-priority-cache)
-        (let* ((type (downcase (string-trim severity)))
-               (priority (cond
-                          ((string-prefix-p "error" type) 1)
-                          ((string-prefix-p "warning" type) 2)
-                          ((string-prefix-p "note" type) 3)
-                          (t 4))))
-          (puthash severity priority periphery--severity-priority-cache)
-          priority))))
+    (let ((type (downcase (string-trim severity))))
+      (cond
+       ((string-prefix-p "error" type) 1)
+       ((string-prefix-p "warning" type) 2)
+       ((string-prefix-p "note" type) 3)
+       (t 4)))))
 
 (defun periphery--listing-command (errorList)
-  "Create an ERRORLIST for the current mode, prioritizing errors.
-Note: errorList is already sorted by periphery-core--sort-results, skip re-sorting."
-  (save-selected-window
+  "Create an ERRORLIST for the current mode, prioritizing errors."
+  (let ((sorted-list (sort errorList
+                           (lambda (a b)
+                             (let* ((entry-a (cadr a))
+                                    (entry-b (cadr b))
+                                    (severity-a (aref entry-a 0))
+                                    (severity-b (aref entry-b 0))
+                                    (file-a (aref entry-a 1))
+                                    (file-b (aref entry-b 1))
+                                    (priority-a (periphery--severity-priority severity-a))
+                                    (priority-b (periphery--severity-priority severity-b)))
+                               (if (= priority-a priority-b)
+                                   (string< file-a file-b)
+                                 (< priority-a priority-b)))))))
+
+    (save-selected-window
       (let* ((buffer (get-buffer-create periphery-buffer-name))
              (window (get-buffer-window buffer)))
         (pop-to-buffer buffer nil)
@@ -86,7 +92,7 @@ Note: errorList is already sorted by periphery-core--sort-results, skip re-sorti
         (unless (equal (current-buffer) buffer)
           (select-window window))
 
-        (setq tabulated-list-entries (-non-nil errorList))
+        (setq tabulated-list-entries (-non-nil sorted-list))
 
         (tabulated-list-print t)
 
@@ -105,7 +111,7 @@ Note: errorList is already sorted by periphery-core--sort-results, skip re-sorti
                          (when-let* ((entry (tabulated-list-get-entry))
                                      (severity (aref entry 0)))
                            (when (string-match-p "error" (downcase severity))
-                             (periphery--open-current-line)))))))))
+                             (periphery--open-current-line))))))))))
 
 
 
@@ -119,93 +125,54 @@ Note: errorList is already sorted by periphery-core--sort-results, skip re-sorti
                     'face (periphery--full-color-from-keyword severity)))))
 
 (defun periphery--center-text (word)
-  "Center WORD to default length (delegates to cached core function)."
-  (periphery-core--center-text word))
-
-(defvar periphery--color-cache (make-hash-table :test 'equal)
-  "Cache for keyword -> face lookups.")
-
-(defvar periphery--full-color-cache (make-hash-table :test 'equal)
-  "Cache for keyword -> full-face lookups.")
+  "Center WORD to default length."
+  (let* ((word-len (string-width word))
+         (padding (/ (- default-length word-len) 3))
+         (result (concat (make-string padding ?\s) word)))
+    (while (< (string-width result) (- default-length 1))
+      (setq result (concat result " ")))
+    result))
 
 (defun periphery--color-from-keyword (keyword)
-  "Get color face from KEYWORD (cached)."
-  (or (gethash keyword periphery--color-cache)
-      (let* ((type (upcase (string-trim-left keyword)))
-             (face (pcase type
-                     ((or "WARNING" "MATCH") 'periphery-warning-face)
-                     ("INFO" 'periphery-note-face)
-                     ("ERROR" 'periphery-error-face)
-                     ("NOTE" 'periphery-note-face)
-                     ((or "FIX" "FIXME") 'periphery-fix-face)
-                     ((or "PERF" "PERFORMANCE") 'periphery-performance-face)
-                     ("TODO" 'periphery-todo-face)
-                     ("HACK" 'periphery-hack-face)
-                     (_ 'periphery-error-face))))
-        (puthash keyword face periphery--color-cache)
-        face)))
+  "Get color face from KEYWORD."
+  (let ((type (upcase (string-trim-left keyword))))
+    (pcase type
+      ((or "WARNING" "MATCH") 'periphery-warning-face)
+      ("INFO" 'periphery-note-face)
+      ("ERROR" 'periphery-error-face)
+      ("NOTE" 'periphery-note-face)
+      ((or "FIX" "FIXME") 'periphery-fix-face)
+      ((or "PERF" "PERFORMANCE") 'periphery-performance-face)
+      ("TODO" 'periphery-todo-face)
+      ("HACK" 'periphery-hack-face)
+      (_ 'periphery-error-face))))
 
 (defun periphery--full-color-from-keyword (keyword)
-  "Get full color face from KEYWORD (cached)."
-  (or (gethash keyword periphery--full-color-cache)
-      (let* ((type (upcase (string-trim-left keyword)))
-             (face (pcase type
-                     ((or "WARNING" "MATCH") 'periphery-warning-face-full)
-                     ("INFO" 'periphery-note-face-full)
-                     ("ERROR" 'periphery-error-face-full)
-                     ("NOTE" 'periphery-note-face-full)
-                     ((or "FIX" "FIXME") 'periphery-fix-face-full)
-                     ((or "PERF" "PERFORMANCE") 'periphery-performance-face-full)
-                     ("TODO" 'periphery-todo-face-full)
-                     ("HACK" 'periphery-hack-face-full)
-                     (_ 'periphery-error-face-full))))
-        (puthash keyword face periphery--full-color-cache)
-        face)))
+  "Get full color face from KEYWORD."
+  (let ((type (upcase (string-trim-left keyword))))
+    (pcase type
+      ((or "WARNING" "MATCH") 'periphery-warning-face-full)
+      ("INFO" 'periphery-note-face-full)
+      ("ERROR" 'periphery-error-face-full)
+      ("NOTE" 'periphery-note-face-full)
+      ((or "FIX" "FIXME") 'periphery-fix-face-full)
+      ((or "PERF" "PERFORMANCE") 'periphery-performance-face-full)
+      ("TODO" 'periphery-todo-face-full)
+      ("HACK" 'periphery-hack-face-full)
+      (_ 'periphery-error-face-full))))
 
-(defvar periphery--highlight-buffer nil
-  "Reusable buffer for highlighting operations.")
-
-(cl-defun periphery--mark-all-symbols (&key input regex property)
-  "Highlight all quoted symbols (as INPUT REGEX PROPERTY).
-Uses a reusable buffer to avoid creating/killing buffers repeatedly."
-  (unless (buffer-live-p periphery--highlight-buffer)
-    (setq periphery--highlight-buffer (get-buffer-create " *periphery-highlight*")))
-  (with-current-buffer periphery--highlight-buffer
-    (erase-buffer)
+(cl-defun periphery--mark-all-symbols (&key input regex property (group 0))
+  "Highlight all quoted symbols (as INPUT REGEX PROPERTY GROUP).
+GROUP specifies which capture group to highlight (default 0 for full match)."
+  (with-temp-buffer
     (insert input)
     (goto-char (point-min))
     (while (re-search-forward regex nil t)
-      (let ((match-start (match-beginning 0))
-            (match-end (match-end 0)))
-        (when (< match-start match-end)
+      (let ((match-start (match-beginning group))
+            (match-end (match-end group)))
+        (when (and match-start match-end (< match-start match-end))
           (add-text-properties match-start match-end property)
-          (goto-char match-end))))
-    (buffer-string)))
-
-(defun periphery--apply-all-highlights (input patterns)
-  "Apply all PATTERNS to INPUT in a single buffer operation.
-PATTERNS is a list of (regex . property) cons cells.
-If the regex has a capture group, highlights group 1; otherwise highlights group 0.
-Much faster than calling periphery--mark-all-symbols multiple times."
-  (unless (buffer-live-p periphery--highlight-buffer)
-    (setq periphery--highlight-buffer (get-buffer-create " *periphery-highlight*")))
-  (with-current-buffer periphery--highlight-buffer
-    (erase-buffer)
-    (insert input)
-    ;; Apply all patterns in sequence without copying buffer contents
-    (dolist (pattern patterns)
-      (let ((regex (car pattern))
-            (property (cdr pattern)))
-        (when regex
-          (goto-char (point-min))
-          (while (re-search-forward regex nil t)
-            ;; Use group 1 if it exists, otherwise group 0
-            (let* ((group (if (match-beginning 1) 1 0))
-                   (match-start (match-beginning group))
-                   (match-end (match-end group)))
-              (when (and match-start match-end (< match-start match-end))
-                (add-text-properties match-start match-end property)
-                (goto-char (match-end 0))))))))  ; Always advance past full match
+          (goto-char (match-end 0)))))  ; Always move past full match
     (buffer-string)))
 
 (defun parse-missing-package-product (buffer)
