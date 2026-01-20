@@ -1,7 +1,7 @@
-;;; -*- lexical-binding: t -*-
-;;; Periphery --- A simple package to parse output from compile commands
+;;; periphery.el --- A simple package to parse output from compile commands -*- lexical-binding: t; -*-
 
-;;; Commentary: --- A simple package
+;;; Commentary:
+;;; --- A simple package
 
 ;;; Code:
 
@@ -33,8 +33,6 @@
 (define-key periphery-mode-map (kbd "RET") #'periphery--open-current-line)
 (define-key periphery-mode-map (kbd "<return>") 'periphery--open-current-line)
 (define-key periphery-mode-map (kbd "o") 'periphery--open-current-line)
-
-(defvar periphery-mode-map nil "Keymap for periphery.")
 
 (defvar-local periphery-errorList '())
 
@@ -96,6 +94,9 @@
 
         (tabulated-list-print t)
 
+        ;; Always scroll to top after inserting new items
+        (goto-char (point-min))
+
         (if (proper-list-p tabulated-list-entries)
             (periphery-message-with-count
              :tag ""
@@ -106,12 +107,13 @@
         ;; Auto-open first error (only if it's actually an error, not a warning)
         (run-at-time 0.2 nil
                      (lambda ()
-                       (with-current-buffer (get-buffer periphery-buffer-name)
-                         (goto-char (point-min))
-                         (when-let* ((entry (tabulated-list-get-entry))
-                                     (severity (aref entry 0)))
-                           (when (string-match-p "error" (downcase severity))
-                             (periphery--open-current-line))))))))))
+                       (when-let ((buf (get-buffer periphery-buffer-name)))
+                         (with-current-buffer buf
+                           (goto-char (point-min))
+                           (when-let* ((entry (tabulated-list-get-entry))
+                                       (severity (aref entry 0)))
+                              (when (string-match-p "error" (downcase severity))
+                                (periphery--open-current-line)))))))))))
 
 
 
@@ -161,19 +163,30 @@
       ("HACK" 'periphery-hack-face-full)
       (_ 'periphery-error-face-full))))
 
-(cl-defun periphery--mark-all-symbols (&key input regex property (group 0))
-  "Highlight all quoted symbols (as INPUT REGEX PROPERTY GROUP).
-GROUP specifies which capture group to highlight (default 0 for full match)."
-  (with-temp-buffer
-    (insert input)
-    (goto-char (point-min))
-    (while (re-search-forward regex nil t)
-      (let ((match-start (match-beginning group))
-            (match-end (match-end group)))
-        (when (and match-start match-end (< match-start match-end))
-          (add-text-properties match-start match-end property)
-          (goto-char (match-end 0)))))  ; Always move past full match
-    (buffer-string)))
+(defun periphery--apply-all-highlights (input patterns)
+  "Apply all highlight PATTERNS to INPUT in a single buffer pass.
+PATTERNS is a list of (REGEX PROPERTY GROUP) tuples where:
+  REGEX is the pattern to match
+  PROPERTY is the text property list to apply
+  GROUP is the capture group to highlight (default 0 for full match).
+Returns the highlighted string. This is more efficient than multiple
+calls to mark individual patterns as it uses a single temp buffer."
+  (if (or (null patterns) (string-empty-p input))
+      input
+    (with-temp-buffer
+      (insert input)
+      (dolist (pattern patterns)
+        (let ((regex (nth 0 pattern))
+              (property (nth 1 pattern))
+              (group (or (nth 2 pattern) 0)))
+          (when regex
+            (goto-char (point-min))
+            (while (re-search-forward regex nil t)
+              (let ((start (match-beginning group))
+                    (end (match-end group)))
+                (when (and start end (< start end))
+                  (add-text-properties start end property)))))))
+      (buffer-string))))
 
 (defun parse-missing-package-product (buffer)
   "Parse missing package product errors from the current BUFFER."
@@ -192,7 +205,7 @@ GROUP specifies which capture group to highlight (default 0 for full match)."
                :line "1"
                :keyword "error"
                :result failure-msg
-               :regex (alist-get 'quotes periphery-regex-patterns))
+               :regex (periphery--get-highlight-pattern 'quotes))
               errors)))
     errors))
 
@@ -217,7 +230,7 @@ GROUP specifies which capture group to highlight (default 0 for full match)."
                :line "1"
                :keyword "error"
                :result failure-msg
-               :regex (alist-get 'quotes periphery-regex-patterns))
+               :regex (periphery--get-highlight-pattern 'quotes))
               errors)))
     errors))
 
@@ -245,7 +258,7 @@ GROUP specifies which capture group to highlight (default 0 for full match)."
                :line "999"
                :keyword "error"
                :result failure-msg
-               :regex (alist-get 'quotes periphery-regex-patterns))
+               :regex (periphery--get-highlight-pattern 'quotes))
               errors)))
     errors))
 
@@ -331,7 +344,8 @@ CONFIG can be:
   (when-let* ((buffer (get-buffer periphery-buffer-name)))
     (kill-buffer buffer)))
 
-(defun periphery:toggle-buffer ()
+;;; ###autoload
+(defun periphery-toggle-buffer ()
   "Toggle visibility of the Periphery buffer window."
   (interactive)
   (if-let* ((buffer (get-buffer periphery-buffer-name)))
@@ -356,7 +370,7 @@ CONFIG can be:
 (defun periphery--clean-up-comments (text)
   "Cleanup comments from (as TEXT) fixmes and todos."
   (save-match-data
-    (and (string-match (alist-get 'todos periphery-regex-patterns) text)
+    (and (string-match (alist-get 'todos periphery-builtin-patterns) text)
          (if-let* ((keyword (match-string 1 text))
                 (comment (match-string 2 text)))
              (list keyword comment)))))
@@ -372,7 +386,7 @@ CONFIG can be:
   (setq default-length 8)
   (setq-local case-fold-search nil) ;; Make regex case sensitive
   (save-match-data
-    (and (string-match (alist-get 'search periphery-regex-patterns) text)
+    (and (string-match (alist-get 'search periphery-builtin-patterns) text)
          (let* ((file (match-string 1 text))
                 (line (match-string 2 text))
                 (column (match-string 3 text))
@@ -399,22 +413,24 @@ CONFIG can be:
 ;; Delegate to new core building function
 (cl-defun periphery--build-list (&key path file line keyword result regex)
   "Build list from (as PATH FILE LINE KEYWORD RESULT REGEX)."
-  (periphery-core-build-entry
-   :path path
-   :file file
-   :line line
-   :severity keyword
-   :message (periphery--mark-all-symbols
-             :input (periphery--mark-all-symbols
-                     :input (periphery--mark-all-symbols
-                             :input (periphery--process-message result)
-                             :regex (alist-get 'strings periphery-highlight-patterns)
-                             :property '(face highlight))
-                     :regex (alist-get 'parentheses periphery-highlight-patterns)
-                     :property '(face periphery-warning-face))
-             :regex regex
-             :property '(face periphery-identifier-face))
-   :face-fn #'periphery--full-color-from-keyword))
+  (let* ((processed-msg (periphery--process-message result))
+         (patterns
+          (delq nil
+                (list
+                 (when-let ((strings-regex (periphery--get-highlight-pattern 'strings)))
+                   (list strings-regex '(face highlight) 0))
+                 (when-let ((parens-regex (periphery--get-highlight-pattern 'parentheses)))
+                   (list parens-regex '(face periphery-warning-face) 0))
+                 (when regex
+                   (list regex '(face periphery-identifier-face) 0)))))
+         (highlighted-msg (periphery--apply-all-highlights processed-msg patterns)))
+    (periphery-core-build-entry
+     :path path
+     :file file
+     :line line
+     :severity keyword
+     :message highlighted-msg
+     :face-fn #'periphery--full-color-from-keyword)))
 
 (defun periphery--process-message (message)
   "Process MESSAGE, optionally trimming the prefix and applying face properties."
@@ -446,24 +462,22 @@ CONFIG can be:
 
 (cl-defun periphery--build-todo-list (&key path &key file &key line &key keyword &key result &key regex)
   "Build list from (as PATH FILE LINE KEYWORD RESULT REGEX)."
-  (list path (vector
-              (periphery--propertize-severity keyword)
-              (propertize (file-name-sans-extension (file-name-nondirectory file)) 'face 'periphery-filename-face)
-              (propertize line 'face 'periphery-linenumber-face)
-              (periphery--mark-all-symbols
-               :input (periphery--mark-all-symbols
-                       :input (periphery--mark-all-symbols
-                               :input
-                                (propertize
-                                 result
-                                 'face
-                                  (periphery--color-from-keyword keyword))
-                               :regex (alist-get 'strings periphery-regex-patterns)
-                               :property '(face highlight))
-                       :regex (alist-get 'parentheses periphery-regex-patterns)
-                       :property '(face periphery-warning-face))
-               :regex regex
-               :property '(face periphery-identifier-face)))))
+  (let* ((base-text (propertize result 'face (periphery--color-from-keyword keyword)))
+         (patterns
+          (delq nil
+                (list
+                 (when-let ((strings-regex (periphery--get-highlight-pattern 'strings)))
+                   (list strings-regex '(face highlight) 0))
+                 (when-let ((parens-regex (periphery--get-highlight-pattern 'parentheses)))
+                   (list parens-regex '(face periphery-warning-face) 0))
+                 (when regex
+                   (list regex '(face periphery-identifier-face) 0)))))
+         (highlighted-text (periphery--apply-all-highlights base-text patterns)))
+    (list path (vector
+                (periphery--propertize-severity keyword)
+                (propertize (file-name-sans-extension (file-name-nondirectory file)) 'face 'periphery-filename-face)
+                (propertize line 'face 'periphery-linenumber-face)
+                highlighted-text))))
 
 (cl-defun periphery-parse-search-result (&key text query)
   "Parse search result (as TITLE TEXT QUERY)."
@@ -536,7 +550,6 @@ CONFIG can be:
                                                                       'periphery-hack-face-full
                                                                     'periphery-fix-face-full)))
                                                             (svg-tag-make text :face face :crop-left t)
-                                                            (svg-tag-make action :face face :inverse t)
-                                                            ))))))
+                                                            (svg-tag-make action :face face :inverse t)))))))
 (provide 'periphery)
 ;;; periphery.el ends here

@@ -247,6 +247,44 @@ and FACE is the face to apply."
   :type '(alist :key-type symbol :value-type face)
   :group 'periphery-config)
 
+;; Performance optimization: Hash table caches for O(1) lookups
+(defvar periphery--highlight-pattern-cache nil
+  "Hash table cache for highlight patterns. Lazily initialized.")
+
+(defvar periphery--syntax-face-cache nil
+  "Hash table cache for syntax faces. Lazily initialized.")
+
+(defun periphery--init-highlight-cache ()
+  "Initialize the highlight pattern and syntax face caches."
+  (setq periphery--highlight-pattern-cache (make-hash-table :test 'eq))
+  (setq periphery--syntax-face-cache (make-hash-table :test 'eq))
+  (dolist (pair periphery-highlight-patterns)
+    (puthash (car pair) (cdr pair) periphery--highlight-pattern-cache))
+  (dolist (pair periphery-syntax-faces)
+    (puthash (car pair) (cdr pair) periphery--syntax-face-cache)))
+
+(defun periphery--get-highlight-pattern (key)
+  "Get highlight pattern for KEY with O(1) lookup.
+Lazily initializes the cache on first access."
+  (unless periphery--highlight-pattern-cache
+    (periphery--init-highlight-cache))
+  (gethash key periphery--highlight-pattern-cache))
+
+(defun periphery--get-syntax-face (key)
+  "Get syntax face for KEY with O(1) lookup.
+Lazily initializes the cache on first access."
+  (unless periphery--syntax-face-cache
+    (periphery--init-highlight-cache))
+  (gethash key periphery--syntax-face-cache))
+
+;;;###autoload
+(defun periphery-clear-highlight-cache ()
+  "Clear the highlight pattern and syntax face caches.
+Call this after modifying `periphery-highlight-patterns' or `periphery-syntax-faces'."
+  (interactive)
+  (setq periphery--highlight-pattern-cache nil)
+  (setq periphery--syntax-face-cache nil))
+
 ;;;###autoload
 (defun periphery-add-highlight-pattern (element pattern &optional face)
   "Add a new highlight pattern for ELEMENT with PATTERN and optional FACE.
@@ -259,6 +297,8 @@ FACE is the face to apply (defaults to periphery-identifier-face)."
     (setf (alist-get element periphery-highlight-patterns) pattern)
     ;; Add face mapping
     (setf (alist-get element periphery-syntax-faces) face)
+    ;; Clear cache so new pattern takes effect
+    (periphery-clear-highlight-cache)
     (message "Added highlight pattern for %s" element)))
 
 ;;;###autoload
@@ -274,6 +314,8 @@ FACE is the face to apply (defaults to periphery-identifier-face)."
         (assq-delete-all element periphery-highlight-patterns))
   (setq periphery-syntax-faces 
         (assq-delete-all element periphery-syntax-faces))
+  ;; Clear cache so removal takes effect
+  (periphery-clear-highlight-cache)
   (message "Removed highlight pattern for %s" element))
 
 ;;;###autoload

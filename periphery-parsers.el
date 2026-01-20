@@ -9,6 +9,9 @@
 (require 'periphery-core)
 (require 'cl-lib)
 
+;; Forward declaration to avoid require in hot path
+(declare-function periphery--apply-all-highlights "periphery")
+
 ;; Ensure builtin patterns are available
 (unless (boundp 'periphery-builtin-patterns)
   (load "periphery-config"))
@@ -224,61 +227,41 @@
   'periphery-warning-face-full)
 
 (defun periphery-parser--apply-highlighting (message)
-  "Apply syntax highlighting to MESSAGE for strings, parentheses, etc."
-  (require 'periphery)  ; For periphery--mark-all-symbols
+  "Apply syntax highlighting to MESSAGE for strings, parentheses, etc.
+Uses single-pass highlighting for better performance."
   (when periphery-debug
     (message "Applying highlighting to: %s" message))
-  (let ((highlighted message))
-    ;; Highlight strings and quotes with different faces
-    (when (boundp 'periphery-highlight-patterns)
-      ;; Apply highlighting in the right order: content first (group 1), then delimiters
-
-      ;; Highlight content inside single quotes (group 1 = just the content)
-      (let ((quote-content-regex (alist-get 'quote-content periphery-highlight-patterns))
-            (quote-content-face (alist-get 'quote-content periphery-syntax-faces)))
-        (setq highlighted (periphery--mark-all-symbols
-                           :input highlighted
-                           :regex quote-content-regex
-                           :property `(face ,quote-content-face)
-                           :group 1)))
-
-      ;; Highlight content inside double quotes (group 1 = just the content)
-      (let ((string-content-regex (alist-get 'string-content periphery-highlight-patterns))
-            (string-content-face (alist-get 'string-content periphery-syntax-faces)))
-        (setq highlighted (periphery--mark-all-symbols
-                           :input highlighted
-                           :regex string-content-regex
-                           :property `(face ,string-content-face)
-                           :group 1)))
-
-      ;; Highlight single quote marks
-      (let ((quote-marks-regex (alist-get 'quote-marks periphery-highlight-patterns))
-            (quote-marks-face (alist-get 'quote-marks periphery-syntax-faces)))
-        (setq highlighted (periphery--mark-all-symbols
-                           :input highlighted
-                           :regex quote-marks-regex
-                           :property `(face ,quote-marks-face))))
-
-      ;; Highlight double quote marks
-      (let ((string-marks-regex (alist-get 'string-marks periphery-highlight-patterns))
-            (string-marks-face (alist-get 'string-marks periphery-syntax-faces)))
-        (setq highlighted (periphery--mark-all-symbols
-                           :input highlighted
-                           :regex string-marks-regex
-                           :property `(face ,string-marks-face))))
-
-      ;; Highlight parentheses
-      (let ((parens-regex (alist-get 'parentheses periphery-highlight-patterns))
-            (parens-face (alist-get 'parentheses periphery-syntax-faces)))
-        (setq highlighted (periphery--mark-all-symbols
-                           :input highlighted
-                           :regex parens-regex
-                           :property `(face ,parens-face)))))
-    ;; Apply base message face only to parts that don't have face properties
-    (when periphery-debug
-      (message "Final highlighted: %s" highlighted))
-    ;; Don't overwrite existing face properties
-    highlighted))
+  (if (not (boundp 'periphery-highlight-patterns))
+      message
+    ;; Build pattern list using cached O(1) lookups
+    ;; Order matters: content first (group 1), then delimiters
+    (let ((patterns
+           (delq nil
+                 (list
+                  ;; Quote content (group 1)
+                  (when-let* ((regex (periphery--get-highlight-pattern 'quote-content))
+                              (face (periphery--get-syntax-face 'quote-content)))
+                    (list regex `(face ,face) 1))
+                  ;; String content (group 1)
+                  (when-let* ((regex (periphery--get-highlight-pattern 'string-content))
+                              (face (periphery--get-syntax-face 'string-content)))
+                    (list regex `(face ,face) 1))
+                  ;; Quote marks (group 0)
+                  (when-let* ((regex (periphery--get-highlight-pattern 'quote-marks))
+                              (face (periphery--get-syntax-face 'quote-marks)))
+                    (list regex `(face ,face) 0))
+                  ;; String marks (group 0)
+                  (when-let* ((regex (periphery--get-highlight-pattern 'string-marks))
+                              (face (periphery--get-syntax-face 'string-marks)))
+                    (list regex `(face ,face) 0))
+                  ;; Parentheses (group 0)
+                  (when-let* ((regex (periphery--get-highlight-pattern 'parentheses))
+                              (face (periphery--get-syntax-face 'parentheses)))
+                    (list regex `(face ,face) 0))))))
+      (let ((highlighted (periphery--apply-all-highlights message patterns)))
+        (when periphery-debug
+          (message "Final highlighted: %s" highlighted))
+        highlighted))))
 
 ;; Register default parsers
 ;;;###autoload

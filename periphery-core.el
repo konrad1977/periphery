@@ -18,6 +18,18 @@
 (defvar periphery-core-last-input nil
   "Cache of last processed input for debugging.")
 
+(defun periphery-core--deduplicate (list)
+  "Remove duplicates from LIST using hash table for O(n) performance.
+Uses the car of each element (path) as the unique key."
+  (let ((seen (make-hash-table :test 'equal))
+        (result '()))
+    (dolist (item list)
+      (let ((key (car item)))
+        (unless (gethash key seen)
+          (puthash key t seen)
+          (push item result))))
+    (nreverse result)))
+
 ;;;###autoload
 (cl-defun periphery-core-parse (&key input type parsers callback query)
   "Parse INPUT using parsers of given TYPE or specific PARSERS list.
@@ -44,10 +56,10 @@ QUERY is an optional search query for highlighting in search results."
           (message "Applying parser: %s" parser-id))
         (periphery-core--apply-parser input config query)))
 
-    ;; Remove duplicates and sort
+    ;; Remove duplicates (O(n) with hash table) and sort
     (setq periphery-core-error-list
           (periphery-core--sort-results
-           (delete-dups periphery-core-error-list)))
+           (periphery-core--deduplicate periphery-core-error-list)))
 
     (when periphery-debug
       (message "Found %d errors" (length periphery-core-error-list)))
