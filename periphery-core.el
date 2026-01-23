@@ -19,12 +19,19 @@
   "Cache of last processed input for debugging.")
 
 (defun periphery-core--deduplicate (list)
-  "Remove duplicates from LIST using hash table for O(n) performance.
-Uses the car of each element (path) as the unique key."
+  "Remove exact duplicates from LIST.
+Uses path + severity + message as composite key to allow multiple
+different errors/warnings on the same line."
   (let ((seen (make-hash-table :test 'equal))
         (result '()))
     (dolist (item list)
-      (let ((key (car item)))
+      (let* ((path (car item))
+             (vector (cadr item))
+             ;; Create composite key: path + severity-type + first 50 chars of message
+             (severity (when (vectorp vector) (aref vector 0)))
+             (message (when (vectorp vector) 
+                        (substring (aref vector 3) 0 (min 50 (length (aref vector 3))))))
+             (key (format "%s|%s|%s" path severity message)))
         (unless (gethash key seen)
           (puthash key t seen)
           (push item result))))
@@ -38,7 +45,9 @@ PARSERS can be a list of parser IDs to use.
 CALLBACK is called with the parsed results.
 QUERY is an optional search query for highlighting in search results."
   (when periphery-debug
-    (message "periphery-core-parse called with type: %s, query: %s" type query))
+    (message "periphery-core-parse called with type: %s, query: %s" type query)
+    (message "  Input length: %d chars" (length input))
+    (message "  First 200 chars: %s" (substring input 0 (min 200 (length input)))))
 
   (setq periphery-core-last-input input)
   (setq periphery-core-error-list '())
@@ -47,13 +56,18 @@ QUERY is an optional search query for highlighting in search results."
                              (mapcar #'car (periphery-get-parsers-by-type type)))))
 
     (when periphery-debug
-      (message "Parsers to use: %S" parsers-to-use))
+      (message "Parsers to use: %S" parsers-to-use)
+      (when (null parsers-to-use)
+        (message "WARNING: No parsers found for type %s!" type)
+        (message "  Registered parsers hash size: %d" (hash-table-count periphery-registered-parsers))))
 
     ;; Process input through each parser
     (dolist (parser-id parsers-to-use)
       (when-let ((config (periphery-get-parser parser-id)))
         (when periphery-debug
-          (message "Applying parser: %s" parser-id))
+          (message "Applying parser: %s (regex: %s)" 
+                   parser-id 
+                   (truncate-string-to-width (or (plist-get config :regex) "nil") 50)))
         (periphery-core--apply-parser input config query)))
 
     ;; Remove duplicates (O(n) with hash table) and sort
@@ -102,16 +116,19 @@ Optional QUERY is passed to the parser function if it accepts it."
   "Sort RESULTS by severity and file."
   (sort results
         (lambda (a b)
-          (let ((severity-a (periphery-core--get-severity (car a)))
-                (severity-b (periphery-core--get-severity (car b))))
+          (let ((severity-a (periphery-core--get-severity a))
+                (severity-b (periphery-core--get-severity b)))
             (if (equal severity-a severity-b)
                 (string< (car a) (car b))
               (< severity-a severity-b))))))
 
-(defun periphery-core--get-severity (entry)
-  "Get numeric severity from ENTRY for sorting.
+(defun periphery-core--get-severity (item)
+  "Get numeric severity from ITEM for sorting.
+ITEM is a list (PATH VECTOR) where VECTOR contains [severity file line message].
 Errors = 1, Warnings = 2, Info = 3, etc."
-  (let ((type (downcase (or (ignore-errors (aref (cadr entry) 0)) ""))))
+  (let* ((vector (if (vectorp (cadr item)) (cadr item) nil))
+         (severity-str (when vector (ignore-errors (aref vector 0))))
+         (type (downcase (or severity-str ""))))
     (cond
      ((string-match-p "error" type) 1)
      ((string-match-p "warning" type) 2)

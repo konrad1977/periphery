@@ -21,27 +21,33 @@
 (defun periphery-parser-compiler (line)
   "Parse compiler error/warning from LINE."
   (save-match-data
-    ;; Try the standard compiler pattern
-    (when (string-match (alist-get 'compiler periphery-builtin-patterns) line)
-      (let* ((file (match-string 1 line))
-             (line-num (match-string 2 line))
-             (column (match-string 3 line))
-             (severity (match-string 4 line))
-             (raw-message (string-trim (or (match-string 5 line) "")))
-             (path (if column
-                       (format "%s:%s:%s" file line-num column)
-                     (format "%s:%s" file line-num)))
-             ;; Apply highlighting to the message
-             (highlighted-message (periphery-parser--apply-highlighting raw-message)))
-        (when (and file line-num severity)
-          (periphery-core-build-entry
-           :path path
-           :file file
-           :line line-num
-           :column column
-           :severity severity
-           :message highlighted-message
-           :face-fn #'periphery-parser--severity-face))))))
+    (let ((pattern (alist-get 'compiler periphery-builtin-patterns)))
+      (when periphery-debug
+        (when (string-match-p "error:\\|warning:\\|note:" line)
+          (message "    [compiler] Trying to match line with error/warning/note")))
+      ;; Try the standard compiler pattern
+      (when (string-match pattern line)
+        (let* ((file (match-string 1 line))
+               (line-num (match-string 2 line))
+               (column (match-string 3 line))
+               (severity (match-string 4 line))
+               (raw-message (string-trim (or (match-string 5 line) "")))
+               (path (if column
+                         (format "%s:%s:%s" file line-num column)
+                       (format "%s:%s" file line-num)))
+               ;; Apply highlighting to the message
+               (highlighted-message (periphery-parser--apply-highlighting raw-message)))
+          (when periphery-debug
+            (message "    [compiler] MATCHED: %s at %s:%s" severity file line-num))
+          (when (and file line-num severity)
+            (periphery-core-build-entry
+             :path path
+             :file file
+             :line line-num
+             :column column
+             :severity severity
+             :message highlighted-message
+             :face-fn #'periphery-parser--severity-face)))))))
 
 ;; XCTest Parser
 ;;;###autoload

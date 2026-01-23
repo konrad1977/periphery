@@ -33,8 +33,15 @@
 (define-key periphery-mode-map (kbd "RET") #'periphery--open-current-line)
 (define-key periphery-mode-map (kbd "<return>") 'periphery--open-current-line)
 (define-key periphery-mode-map (kbd "o") 'periphery--open-current-line)
+(define-key periphery-mode-map (kbd "?") 'periphery-filter-menu)
+(define-key periphery-mode-map (kbd "f") 'periphery-filter-menu)
+(define-key periphery-mode-map (kbd "q") 'quit-window)
 
 (defvar-local periphery-errorList '())
+(defvar-local periphery--unfiltered-list '()
+  "Original unfiltered error list.")
+(defvar periphery--current-filter nil
+  "Currently active filter, or nil for no filter. Persists across builds.")
 
 (define-derived-mode periphery-mode tabulated-list-mode "Periphery-mode"
   "Periphery mode.  A mode to show compile errors like Flycheck."
@@ -42,11 +49,12 @@
                                ("Type" 9 nil)
                                ("File" 28 t)
                                ("Line" 4 nil)
-                               ("Message" 120 nil)
+                               ("Message" 0 nil)  ; 0 = no width limit, show full message
                                ]
         tabulated-list-padding 1
         tabulated-list-sort-key (cons "Line" nil))
   (use-local-map periphery-mode-map)
+  (setq truncate-lines t)  ; No wrapping, truncate at window edge
   (tabulated-list-init-header))
 
 (defun periphery--open-current-line ()
@@ -65,6 +73,30 @@
        ((string-prefix-p "note" type) 3)
        (t 4)))))
 
+(defun periphery--get-severity-type (entry)
+  "Extract clean severity type from ENTRY (error, warning, note, etc.)."
+  (let* ((vector (cadr entry))
+         (severity-raw (aref vector 0))
+         ;; Remove text properties and trim whitespace
+         (severity-clean (string-trim (substring-no-properties severity-raw))))
+    (downcase severity-clean)))
+
+(defun periphery--apply-current-filter (entries)
+  "Apply current filter to ENTRIES if one is active."
+  (if (null periphery--current-filter)
+      entries
+    (seq-filter
+     (lambda (entry)
+       (let ((severity (periphery--get-severity-type entry)))
+         (pcase periphery--current-filter
+           ("error" (string= severity "error"))
+           ("warning" (string= severity "warning"))
+           ("note" (string= severity "note"))
+           ("error+warning" (or (string= severity "error")
+                                (string= severity "warning")))
+           (_ t))))
+     entries)))
+
 (defun periphery--listing-command (errorList)
   "Create an ERRORLIST for the current mode, prioritizing errors."
   (let ((sorted-list (sort errorList
@@ -81,41 +113,51 @@
                                    (string< file-a file-b)
                                  (< priority-a priority-b)))))))
 
-    (save-selected-window
-      (let* ((buffer (get-buffer-create periphery-buffer-name))
-             (window (get-buffer-window buffer)))
-        (pop-to-buffer buffer nil)
-        (periphery-mode)
-
-        (unless (equal (current-buffer) buffer)
-          (select-window window))
-
-        (setq tabulated-list-entries (-non-nil sorted-list))
-
+    (let* ((buffer (get-buffer-create periphery-buffer-name))
+           (window (get-buffer-window buffer))
+           (entry-count 0))
+      
+      ;; Update buffer content - always use with-current-buffer for buffer-local vars
+      (with-current-buffer buffer
+        (unless (derived-mode-p 'periphery-mode)
+          (periphery-mode))
+        
+        ;; Store unfiltered list and apply filter
+        (setq periphery--unfiltered-list (delq nil sorted-list))
+        (setq tabulated-list-entries (periphery--apply-current-filter periphery--unfiltered-list))
+        (setq entry-count (length tabulated-list-entries))
+        
         (tabulated-list-print t)
-
+        
         ;; Always scroll to top after inserting new items
-        (goto-char (point-min))
+        (goto-char (point-min)))
+      
+      ;; Display buffer if not already visible
+      (unless window
+        (display-buffer buffer))
+      
+      ;; Show count message
+      (when (> entry-count 0)
+        (periphery-message-with-count
+         :tag (if periphery--current-filter (format "[%s]" periphery--current-filter) "")
+         :text "Errors or warnings"
+         :count (format "%d" entry-count)
+         :attributes 'periphery-todo-face))
+      
+      ;; Process pending events to prevent blocking build callbacks
+      ;; This is critical to allow installation to proceed immediately
+      (sit-for 0)
 
-        (if (proper-list-p tabulated-list-entries)
-            (periphery-message-with-count
-             :tag ""
-             :text "Errors or warnings"
-             :count (format "%d" (length tabulated-list-entries))
-             :attributes 'periphery-todo-face))
-
-        ;; Auto-open first error (only if it's actually an error, not a warning)
-        (run-at-time 0.2 nil
-                     (lambda ()
-                       (when-let ((buf (get-buffer periphery-buffer-name)))
-                         (with-current-buffer buf
-                           (goto-char (point-min))
-                           (when-let* ((entry (tabulated-list-get-entry))
-                                       (severity (aref entry 0)))
-                              (when (string-match-p "error" (downcase severity))
-                                (periphery--open-current-line)))))))))))
-
-
+      ;; Auto-open first error (only if it's actually an error, not a warning)
+      (run-at-time 0.2 nil
+                   (lambda ()
+                     (when-let ((buf (get-buffer periphery-buffer-name)))
+                       (with-current-buffer buf
+                         (goto-char (point-min))
+                         (when-let* ((entry (tabulated-list-get-entry))
+                                     (severity (aref entry 0)))
+                           (when (string-match-p "error" (downcase severity))
+                             (periphery--open-current-line))))))))))
 
 (defun periphery--propertize-severity (severity)
   "Colorize TEXT using SEVERITY."
@@ -308,15 +350,21 @@ CONFIG can be:
           (message "Unknown periphery-run-parser config: %s" key)))))
     
     ;; Use the core parsing system with dynamic configuration
-    (let ((errors (periphery-core-parse
-                   :input input
-                   :type type
-                   :parsers parsers
-                   :query query)))
-      (setq periphery-errorList errors)
-      (when (or (periphery--is-buffer-visible) periphery-errorList)
-        (periphery--listing-command periphery-errorList))
-      (not (null periphery-errorList))))) ; Return t if any errors found
+    (condition-case err
+        (let ((errors (periphery-core-parse
+                       :input input
+                       :type type
+                       :parsers parsers
+                       :query query)))
+          (setq periphery-errorList errors)
+          (when periphery-debug
+            (message "periphery-run-parser: parsed %d errors" (length errors)))
+          (when (or (periphery--is-buffer-visible) periphery-errorList)
+            (periphery--listing-command periphery-errorList))
+          (not (null periphery-errorList)))
+      (error
+       (message "periphery-run-parser ERROR: %s" (error-message-string err))
+       nil)))) ; Return nil on error
 
 (defun periphery-sort-error (errors)
   "Sort ERRORS by severity (Error, Warning, Note) and then by path."
@@ -551,5 +599,172 @@ CONFIG can be:
                                                                     'periphery-fix-face-full)))
                                                             (svg-tag-make text :face face :crop-left t)
                                                             (svg-tag-make action :face face :inverse t)))))))
+
+;;;###autoload
+(defun periphery-test-parse-region (start end)
+  "Parse region from START to END as compiler output for testing."
+  (interactive "r")
+  (let ((periphery-debug t)
+        (input (buffer-substring-no-properties start end)))
+    (message "Testing periphery parser with %d chars of input..." (length input))
+    (periphery-run-parser input :compiler)))
+
+;;;###autoload
+(defun periphery-diagnose ()
+  "Display diagnostic information about periphery configuration."
+  (interactive)
+  (let ((buf (get-buffer-create "*Periphery Diagnostics*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (insert "=== Periphery Diagnostics ===\n\n")
+      (insert (format "Debug mode: %s\n" periphery-debug))
+      (insert (format "Buffer name: %s\n" periphery-buffer-name))
+      (insert (format "Registered parsers: %d\n" (hash-table-count periphery-registered-parsers)))
+      (insert "\nParsers by type:\n")
+      (dolist (type '(:compiler :linter :test :search))
+        (let ((parsers (periphery-get-parsers-by-type type)))
+          (insert (format "  %s: %d parsers\n" type (length parsers)))
+          (dolist (p parsers)
+            (insert (format "    - %s (priority %d, enabled: %s)\n"
+                            (car p)
+                            (plist-get (cdr p) :priority)
+                            (plist-get (cdr p) :enabled))))))
+      (insert "\nCompiler pattern: ")
+      (insert (or (alist-get 'compiler periphery-builtin-patterns) "NOT FOUND"))
+      (insert "\n\n--- Test parsing a sample error ---\n")
+      (let* ((test-line "/test/file.swift:10:5: error: test error message")
+             (result (periphery-parser-compiler test-line)))
+        (insert (format "Test line: %s\n" test-line))
+        (insert (format "Parse result: %s\n" (if result "SUCCESS" "FAILED")))))
+    (pop-to-buffer buf)))
+
+;;; Filtering
+
+(defun periphery--filter-by-type (type)
+  "Filter entries to show only TYPE (error, warning, note, etc.)."
+  (when-let ((buf (get-buffer periphery-buffer-name)))
+    (with-current-buffer buf
+      ;; Save original list if not already saved
+      (when (null periphery--unfiltered-list)
+        (setq periphery--unfiltered-list tabulated-list-entries))
+      (setq periphery--current-filter type)
+      (let ((filtered (if type
+                          (seq-filter
+                           (lambda (entry)
+                             (let ((severity (periphery--get-severity-type entry)))
+                               (string= severity type)))
+                           periphery--unfiltered-list)
+                        periphery--unfiltered-list)))
+        (setq tabulated-list-entries filtered)
+        (tabulated-list-print t)
+        (goto-char (point-min))
+        (message "Filter: %s (%d items)"
+                 (or type "all")
+                 (length filtered))))))
+
+(defun periphery-filter-errors ()
+  "Show only errors."
+  (interactive)
+  (periphery--filter-by-type "error"))
+
+(defun periphery-filter-warnings ()
+  "Show only warnings."
+  (interactive)
+  (periphery--filter-by-type "warning"))
+
+(defun periphery-filter-notes ()
+  "Show only notes."
+  (interactive)
+  (periphery--filter-by-type "note"))
+
+(defun periphery-filter-errors-and-warnings ()
+  "Show errors and warnings."
+  (interactive)
+  (when-let ((buf (get-buffer periphery-buffer-name)))
+    (with-current-buffer buf
+      (when (null periphery--unfiltered-list)
+        (setq periphery--unfiltered-list tabulated-list-entries))
+      (setq periphery--current-filter "error+warning")
+      (let ((filtered (seq-filter
+                       (lambda (entry)
+                         (let ((severity (periphery--get-severity-type entry)))
+                           (or (string= severity "error")
+                               (string= severity "warning"))))
+                       periphery--unfiltered-list)))
+        (setq tabulated-list-entries filtered)
+        (tabulated-list-print t)
+        (goto-char (point-min))
+        (message "Filter: errors+warnings (%d items)" (length filtered))))))
+
+(defun periphery-filter-clear ()
+  "Clear filter and show all entries."
+  (interactive)
+  (when-let ((buf (get-buffer periphery-buffer-name)))
+    (with-current-buffer buf
+      (when periphery--unfiltered-list
+        (setq tabulated-list-entries periphery--unfiltered-list)
+        (setq periphery--current-filter nil)
+        (tabulated-list-print t)
+        (goto-char (point-min))
+        (message "Filter cleared (%d items)" (length tabulated-list-entries))))))
+
+;;; Transient menu
+
+(require 'transient)
+
+(defun periphery--transient-status ()
+  "Return current status for transient header."
+  (let* ((buf (get-buffer periphery-buffer-name))
+         (count (when buf
+                  (with-current-buffer buf
+                    (length tabulated-list-entries))))
+         (total (when buf
+                  (with-current-buffer buf
+                    (length periphery--unfiltered-list)))))
+    (concat
+     (format "Filter: %s"
+             (propertize (or periphery--current-filter "none")
+                         'face 'font-lock-constant-face))
+     (when (and count total (not (= count total)))
+       (format " | Showing: %s/%s"
+               (propertize (number-to-string count) 'face 'warning)
+               (number-to-string total)))
+     (when (and count (= count (or total count)))
+       (format " | Items: %s"
+               (propertize (number-to-string count) 'face 'success))))))
+
+(transient-define-prefix periphery-filter-menu ()
+  "Filter periphery results."
+  [:description periphery--transient-status]
+  ["Filter by severity"
+   ("e" "Errors only" periphery-filter-errors)
+   ("w" "Warnings only" periphery-filter-warnings)
+   ("n" "Notes only" periphery-filter-notes)
+   ("b" "Errors + Warnings" periphery-filter-errors-and-warnings)]
+  ["Actions"
+   ("c" "Clear filter (show all)" periphery-filter-clear)
+   ("g" "Refresh" revert-buffer)
+   ("q" "Quit menu" transient-quit-one)])
+
+;;;###autoload
+(transient-define-prefix periphery-transient ()
+  "Periphery - Build Errors & Warnings."
+  [:description periphery--transient-status]
+  ["Filter"
+   ("e" "Errors only" periphery-filter-errors)
+   ("w" "Warnings only" periphery-filter-warnings)
+   ("n" "Notes only" periphery-filter-notes)
+   ("b" "Errors + Warnings" periphery-filter-errors-and-warnings)
+   ("c" "Clear filter" periphery-filter-clear)]
+  ["Actions"
+   ("t" "Toggle buffer" periphery-toggle-buffer)
+   ("k" "Kill buffer" periphery-kill-buffer)
+   ("g" "Refresh" revert-buffer)]
+  ["Navigation"
+   ("RET" "Open error at point" periphery--open-current-line)
+   ("j" "Next error" next-line)
+   ("k" "Previous error" previous-line)]
+  [("q" "Quit" transient-quit-one)])
+
 (provide 'periphery)
 ;;; periphery.el ends here
