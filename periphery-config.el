@@ -118,11 +118,6 @@
   "Face for the first sentence of the message (up to the first colon)."
   :group 'periphery)
 
-(defface periphery-string-content-face
-  '((t (:foreground "#9399b2" :slant italic)))
-  "Face for content inside double quotes - italic gray."
-  :group 'periphery)
-
 (defcustom periphery-parser-configs nil
   "Alist of parser configurations.
 Each entry is (PARSER-ID . PLIST) where PLIST contains:
@@ -213,23 +208,18 @@ ENABLED determines if parser is active (default t)."
     (cdr (assoc (completing-read prompt parsers nil t) parsers))))
 
 ;; Syntax highlighting configuration
-;; Typographic quotes: ' (U+2018), ' (U+2019), " (U+201C), " (U+201D)
-(defconst periphery--single-quotes "'''")
-(defconst periphery--double-quotes "\"\N{LEFT DOUBLE QUOTATION MARK}\N{RIGHT DOUBLE QUOTATION MARK}")
-
 (defcustom periphery-highlight-patterns
-  `((parentheses . "\\(\(.+?\)\\)")
-    (strings . ,(format "\\([%s][^%s]+[%s]\\)" periphery--double-quotes periphery--double-quotes periphery--double-quotes))
-    (quotes . ,(format "\\([%s][^%s]+[%s]\\)" periphery--single-quotes periphery--single-quotes periphery--single-quotes))
+  '((parentheses . "\\(\(.+?\)\\)")
+    (strings . "\\(\"[^\"]+\"\\)")
+    (quotes . "\\('[^']+'\\)")
     ;; Separate patterns for marks and content
-    (quote-marks . ,(format "\\([%s]\\)" periphery--single-quotes))
-    (quote-content . ,(format "[%s]\\([^%s]+\\)[%s]" periphery--single-quotes periphery--single-quotes periphery--single-quotes))
-    (string-marks . ,(format "\\([%s]\\)" periphery--double-quotes))
-    (string-content . ,(format "[%s]\\([^%s]+\\)[%s]" periphery--double-quotes periphery--double-quotes periphery--double-quotes)))
+    (quote-marks . "\\('\\)")
+    (quote-content . "'\\([^']+\\)'")
+    (string-marks . "\\(\"\\)")
+    (string-content . "\"\\([^\"]+\\)\""))
   "Regex patterns for syntax highlighting in messages.
 Each entry is (ELEMENT . PATTERN) where ELEMENT is the syntax element
-and PATTERN is the regex to match it.
-Includes both regular and typographic quotes."
+and PATTERN is the regex to match it."
   :type '(alist :key-type symbol :value-type string)
   :group 'periphery-config)
 
@@ -239,51 +229,13 @@ Includes both regular and typographic quotes."
     (quotes . highlight)
     (quote-content . periphery-identifier-face)
     (quote-marks . periphery-identifier-face)
-    (string-content . periphery-string-content-face)
-    (string-marks . periphery-string-content-face))
+    (string-content . periphery-identifier-face)
+    (string-marks . periphery-identifier-face))
   "Face configuration for syntax highlighting in error messages.
 Each entry is (ELEMENT . FACE) where ELEMENT is the syntax element
 and FACE is the face to apply."
   :type '(alist :key-type symbol :value-type face)
   :group 'periphery-config)
-
-;; Performance optimization: Hash table caches for O(1) lookups
-(defvar periphery--highlight-pattern-cache nil
-  "Hash table cache for highlight patterns. Lazily initialized.")
-
-(defvar periphery--syntax-face-cache nil
-  "Hash table cache for syntax faces. Lazily initialized.")
-
-(defun periphery--init-highlight-cache ()
-  "Initialize the highlight pattern and syntax face caches."
-  (setq periphery--highlight-pattern-cache (make-hash-table :test 'eq))
-  (setq periphery--syntax-face-cache (make-hash-table :test 'eq))
-  (dolist (pair periphery-highlight-patterns)
-    (puthash (car pair) (cdr pair) periphery--highlight-pattern-cache))
-  (dolist (pair periphery-syntax-faces)
-    (puthash (car pair) (cdr pair) periphery--syntax-face-cache)))
-
-(defun periphery--get-highlight-pattern (key)
-  "Get highlight pattern for KEY with O(1) lookup.
-Lazily initializes the cache on first access."
-  (unless periphery--highlight-pattern-cache
-    (periphery--init-highlight-cache))
-  (gethash key periphery--highlight-pattern-cache))
-
-(defun periphery--get-syntax-face (key)
-  "Get syntax face for KEY with O(1) lookup.
-Lazily initializes the cache on first access."
-  (unless periphery--syntax-face-cache
-    (periphery--init-highlight-cache))
-  (gethash key periphery--syntax-face-cache))
-
-;;;###autoload
-(defun periphery-clear-highlight-cache ()
-  "Clear the highlight pattern and syntax face caches.
-Call this after modifying `periphery-highlight-patterns' or `periphery-syntax-faces'."
-  (interactive)
-  (setq periphery--highlight-pattern-cache nil)
-  (setq periphery--syntax-face-cache nil))
 
 ;;;###autoload
 (defun periphery-add-highlight-pattern (element pattern &optional face)
@@ -297,8 +249,6 @@ FACE is the face to apply (defaults to periphery-identifier-face)."
     (setf (alist-get element periphery-highlight-patterns) pattern)
     ;; Add face mapping
     (setf (alist-get element periphery-syntax-faces) face)
-    ;; Clear cache so new pattern takes effect
-    (periphery-clear-highlight-cache)
     (message "Added highlight pattern for %s" element)))
 
 ;;;###autoload
@@ -314,8 +264,6 @@ FACE is the face to apply (defaults to periphery-identifier-face)."
         (assq-delete-all element periphery-highlight-patterns))
   (setq periphery-syntax-faces 
         (assq-delete-all element periphery-syntax-faces))
-  ;; Clear cache so removal takes effect
-  (periphery-clear-highlight-cache)
   (message "Removed highlight pattern for %s" element))
 
 ;;;###autoload

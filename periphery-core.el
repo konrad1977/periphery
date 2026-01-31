@@ -18,25 +18,6 @@
 (defvar periphery-core-last-input nil
   "Cache of last processed input for debugging.")
 
-(defun periphery-core--deduplicate (list)
-  "Remove exact duplicates from LIST.
-Uses path + severity + message as composite key to allow multiple
-different errors/warnings on the same line."
-  (let ((seen (make-hash-table :test 'equal))
-        (result '()))
-    (dolist (item list)
-      (let* ((path (car item))
-             (vector (cadr item))
-             ;; Create composite key: path + severity-type + first 50 chars of message
-             (severity (when (vectorp vector) (aref vector 0)))
-             (message (when (vectorp vector) 
-                        (substring (aref vector 3) 0 (min 50 (length (aref vector 3))))))
-             (key (format "%s|%s|%s" path severity message)))
-        (unless (gethash key seen)
-          (puthash key t seen)
-          (push item result))))
-    (nreverse result)))
-
 ;;;###autoload
 (cl-defun periphery-core-parse (&key input type parsers callback query)
   "Parse INPUT using parsers of given TYPE or specific PARSERS list.
@@ -45,35 +26,28 @@ PARSERS can be a list of parser IDs to use.
 CALLBACK is called with the parsed results.
 QUERY is an optional search query for highlighting in search results."
   (when periphery-debug
-    (message "periphery-core-parse called with type: %s, query: %s" type query)
-    (message "  Input length: %d chars" (length input))
-    (message "  First 200 chars: %s" (substring input 0 (min 200 (length input)))))
+    (message "periphery-core-parse called with type: %s, query: %s" type query))
 
   (setq periphery-core-last-input input)
   (setq periphery-core-error-list '())
 
   (let ((parsers-to-use (or parsers
-                             (mapcar #'car (periphery-get-parsers-by-type type)))))
+                            (mapcar #'car (periphery-get-parsers-by-type type)))))
 
     (when periphery-debug
-      (message "Parsers to use: %S" parsers-to-use)
-      (when (null parsers-to-use)
-        (message "WARNING: No parsers found for type %s!" type)
-        (message "  Registered parsers hash size: %d" (hash-table-count periphery-registered-parsers))))
+      (message "Parsers to use: %S" parsers-to-use))
 
     ;; Process input through each parser
     (dolist (parser-id parsers-to-use)
-      (when-let ((config (periphery-get-parser parser-id)))
+      (when-let* ((config (periphery-get-parser parser-id)))
         (when periphery-debug
-          (message "Applying parser: %s (regex: %s)" 
-                   parser-id 
-                   (truncate-string-to-width (or (plist-get config :regex) "nil") 50)))
+          (message "Applying parser: %s" parser-id))
         (periphery-core--apply-parser input config query)))
 
-    ;; Remove duplicates (O(n) with hash table) and sort
+    ;; Remove duplicates and sort
     (setq periphery-core-error-list
           (periphery-core--sort-results
-           (periphery-core--deduplicate periphery-core-error-list)))
+           (delete-dups periphery-core-error-list)))
 
     (when periphery-debug
       (message "Found %d errors" (length periphery-core-error-list)))
@@ -87,7 +61,7 @@ QUERY is an optional search query for highlighting in search results."
 (defun periphery-core--apply-parser (input config &optional query)
   "Apply parser CONFIG to INPUT and collect results.
 Optional QUERY is passed to the parser function if it accepts it."
-  (when-let ((parse-fn (plist-get config :parse-fn)))
+  (when-let* ((parse-fn (plist-get config :parse-fn)))
     ;; Apply filter if provided
     (let ((filter-fn (plist-get config :filter-fn)))
       (when filter-fn
@@ -95,15 +69,9 @@ Optional QUERY is passed to the parser function if it accepts it."
 
     ;; Parse each line
     (dolist (line (split-string input "\n"))
-      (when (and line
-                 (not (string-empty-p line))
-                 ;; Skip xcodebuild internal commands (export, set, cd, etc.)
-                 (not (string-match-p "^[[:space:]]*\\(export\\|set\\|cd\\|setenv\\|builtin\\) " line))
-                 ;; Skip lines that are just paths or very long without useful content
-                 (or (< (length line) 500)
-                     (string-match-p "\\(error\\|warning\\|note\\|failed\\):" line)))
+      (when (and line (not (string-empty-p line)))
         (when periphery-debug
-          (message "  Parsing line (%d chars): %s" (length line) (substring line 0 (min 100 (length line)))))
+          (message "  Parsing line (%d chars): %s" (length line) line))
         (let ((result (if query
                           (funcall parse-fn line query)
                         (funcall parse-fn line))))
@@ -116,19 +84,16 @@ Optional QUERY is passed to the parser function if it accepts it."
   "Sort RESULTS by severity and file."
   (sort results
         (lambda (a b)
-          (let ((severity-a (periphery-core--get-severity a))
-                (severity-b (periphery-core--get-severity b)))
+          (let ((severity-a (periphery-core--get-severity (car a)))
+                (severity-b (periphery-core--get-severity (car b))))
             (if (equal severity-a severity-b)
                 (string< (car a) (car b))
               (< severity-a severity-b))))))
 
-(defun periphery-core--get-severity (item)
-  "Get numeric severity from ITEM for sorting.
-ITEM is a list (PATH VECTOR) where VECTOR contains [severity file line message].
+(defun periphery-core--get-severity (entry)
+  "Get numeric severity from ENTRY for sorting.
 Errors = 1, Warnings = 2, Info = 3, etc."
-  (let* ((vector (if (vectorp (cadr item)) (cadr item) nil))
-         (severity-str (when vector (ignore-errors (aref vector 0))))
-         (type (downcase (or severity-str ""))))
+  (let ((type (downcase (or (ignore-errors (aref (cadr entry) 0)) ""))))
     (cond
      ((string-match-p "error" type) 1)
      ((string-match-p "warning" type) 2)

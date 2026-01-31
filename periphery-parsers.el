@@ -9,9 +9,6 @@
 (require 'periphery-core)
 (require 'cl-lib)
 
-;; Forward declaration to avoid require in hot path
-(declare-function periphery--apply-all-highlights "periphery")
-
 ;; Ensure builtin patterns are available
 (unless (boundp 'periphery-builtin-patterns)
   (load "periphery-config"))
@@ -21,33 +18,27 @@
 (defun periphery-parser-compiler (line)
   "Parse compiler error/warning from LINE."
   (save-match-data
-    (let ((pattern (alist-get 'compiler periphery-builtin-patterns)))
-      (when periphery-debug
-        (when (string-match-p "error:\\|warning:\\|note:" line)
-          (message "    [compiler] Trying to match line with error/warning/note")))
-      ;; Try the standard compiler pattern
-      (when (string-match pattern line)
-        (let* ((file (match-string 1 line))
-               (line-num (match-string 2 line))
-               (column (match-string 3 line))
-               (severity (match-string 4 line))
-               (raw-message (string-trim (or (match-string 5 line) "")))
-               (path (if column
-                         (format "%s:%s:%s" file line-num column)
-                       (format "%s:%s" file line-num)))
-               ;; Apply highlighting to the message
-               (highlighted-message (periphery-parser--apply-highlighting raw-message)))
-          (when periphery-debug
-            (message "    [compiler] MATCHED: %s at %s:%s" severity file line-num))
-          (when (and file line-num severity)
-            (periphery-core-build-entry
-             :path path
-             :file file
-             :line line-num
-             :column column
-             :severity severity
-             :message highlighted-message
-             :face-fn #'periphery-parser--severity-face)))))))
+    ;; Try the standard compiler pattern
+    (when (string-match (alist-get 'compiler periphery-builtin-patterns) line)
+      (let* ((file (match-string 1 line))
+             (line-num (match-string 2 line))
+             (column (match-string 3 line))
+             (severity (match-string 4 line))
+             (raw-message (string-trim (or (match-string 5 line) "")))
+             (path (if column
+                       (format "%s:%s:%s" file line-num column)
+                     (format "%s:%s" file line-num)))
+             ;; Apply highlighting to the message
+             (highlighted-message (periphery-parser--apply-highlighting raw-message)))
+        (when (and file line-num severity)
+          (periphery-core-build-entry
+           :path path
+           :file file
+           :line line-num
+           :column column
+           :severity severity
+           :message highlighted-message
+           :face-fn #'periphery-parser--severity-face))))))
 
 ;; XCTest Parser
 ;;;###autoload
@@ -126,7 +117,7 @@
 
 (defun periphery-parser-todo-from-content (content path file line-num)
   "Parse TODO from CONTENT with PATH FILE and LINE-NUM."
-  (when-let ((todo-data (periphery-parser-todo content)))
+  (when-let* ((todo-data (periphery-parser-todo content)))
     (let* ((keyword (car todo-data))
            (comment (cadr todo-data))
            ;; Get the non-full face (without background) for the message
@@ -233,41 +224,59 @@
   'periphery-warning-face-full)
 
 (defun periphery-parser--apply-highlighting (message)
-  "Apply syntax highlighting to MESSAGE for strings, parentheses, etc.
-Uses single-pass highlighting for better performance."
+  "Apply syntax highlighting to MESSAGE for strings, parentheses, etc."
+  (require 'periphery)  ; For periphery--mark-all-symbols
   (when periphery-debug
     (message "Applying highlighting to: %s" message))
-  (if (not (boundp 'periphery-highlight-patterns))
-      message
-    ;; Build pattern list using cached O(1) lookups
-    ;; Order matters: content first (group 1), then delimiters
-    (let ((patterns
-           (delq nil
-                 (list
-                  ;; Quote content (group 1)
-                  (when-let* ((regex (periphery--get-highlight-pattern 'quote-content))
-                              (face (periphery--get-syntax-face 'quote-content)))
-                    (list regex `(face ,face) 1))
-                  ;; String content (group 1)
-                  (when-let* ((regex (periphery--get-highlight-pattern 'string-content))
-                              (face (periphery--get-syntax-face 'string-content)))
-                    (list regex `(face ,face) 1))
-                  ;; Quote marks (group 0)
-                  (when-let* ((regex (periphery--get-highlight-pattern 'quote-marks))
-                              (face (periphery--get-syntax-face 'quote-marks)))
-                    (list regex `(face ,face) 0))
-                  ;; String marks (group 0)
-                  (when-let* ((regex (periphery--get-highlight-pattern 'string-marks))
-                              (face (periphery--get-syntax-face 'string-marks)))
-                    (list regex `(face ,face) 0))
-                  ;; Parentheses (group 0)
-                  (when-let* ((regex (periphery--get-highlight-pattern 'parentheses))
-                              (face (periphery--get-syntax-face 'parentheses)))
-                    (list regex `(face ,face) 0))))))
-      (let ((highlighted (periphery--apply-all-highlights message patterns)))
-        (when periphery-debug
-          (message "Final highlighted: %s" highlighted))
-        highlighted))))
+  (let ((highlighted message))
+    ;; Highlight strings and quotes with different faces
+    (when (boundp 'periphery-highlight-patterns)
+      ;; Apply highlighting in the right order: content first, then delimiters
+      
+      ;; Highlight content inside quotes
+      (let ((quote-content-regex (alist-get 'quote-content periphery-highlight-patterns))
+            (quote-content-face (alist-get 'quote-content periphery-syntax-faces)))
+        (setq highlighted (periphery--mark-all-symbols
+                           :input highlighted
+                           :regex quote-content-regex
+                           :property `(face ,quote-content-face))))
+      
+      ;; Highlight content inside strings  
+      (let ((string-content-regex (alist-get 'string-content periphery-highlight-patterns))
+            (string-content-face (alist-get 'string-content periphery-syntax-faces)))
+        (setq highlighted (periphery--mark-all-symbols
+                           :input highlighted
+                           :regex string-content-regex
+                           :property `(face ,string-content-face))))
+      
+      ;; Highlight quote marks
+      (let ((quote-marks-regex (alist-get 'quote-marks periphery-highlight-patterns))
+            (quote-marks-face (alist-get 'quote-marks periphery-syntax-faces)))
+        (setq highlighted (periphery--mark-all-symbols
+                           :input highlighted
+                           :regex quote-marks-regex
+                           :property `(face ,quote-marks-face))))
+      
+      ;; Highlight string marks
+      (let ((string-marks-regex (alist-get 'string-marks periphery-highlight-patterns))
+            (string-marks-face (alist-get 'string-marks periphery-syntax-faces)))
+        (setq highlighted (periphery--mark-all-symbols
+                           :input highlighted
+                           :regex string-marks-regex
+                           :property `(face ,string-marks-face))))
+      
+      ;; Highlight parentheses
+      (let ((parens-regex (alist-get 'parentheses periphery-highlight-patterns))
+            (parens-face (alist-get 'parentheses periphery-syntax-faces)))
+        (setq highlighted (periphery--mark-all-symbols
+                           :input highlighted
+                           :regex parens-regex
+                           :property `(face ,parens-face)))))
+    ;; Apply base message face only to parts that don't have face properties
+    (when periphery-debug
+      (message "Final highlighted: %s" highlighted))
+    ;; Don't overwrite existing face properties
+    highlighted))
 
 ;; Register default parsers
 ;;;###autoload
@@ -474,57 +483,53 @@ Uses single-pass highlighting for better performance."
 (defun periphery-parser-xcodebuild-error (input)
   "Parse xcodebuild errors from INPUT."
   (when (string-match "^xcodebuild: error: " input)
-    (let* ((raw-message (substring input (match-end 0)))
-           (highlighted-message (periphery-parser--apply-highlighting raw-message)))
+    (let ((message (substring input (match-end 0))))
       (periphery-core-build-entry
        :path "Xcode Build"
        :file "Xcode Build Configuration"
        :line "1"
        :severity "error"
-       :message highlighted-message
+       :message message
        :face-fn #'periphery-parser--severity-face))))
 
 ;;;###autoload
 (defun periphery-parser-device-error (input)
   "Parse device/platform error messages from INPUT."
   (when (string-match "error:\\s*\\(iOS [0-9.]+ is not installed\\..*\\)" input)
-    (let ((highlighted-message (periphery-parser--apply-highlighting (match-string 1 input))))
-      (periphery-core-build-entry
-       :path "Xcode Components"
-       :file "Xcode Build Configuration"
-       :line "1"
-       :severity "error"
-       :message highlighted-message
-       :face-fn #'periphery-parser--severity-face))))
+    (periphery-core-build-entry
+     :path "Xcode Components"
+     :file "Xcode Build Configuration"
+     :line "1"
+     :severity "error"
+     :message (match-string 1 input)
+     :face-fn #'periphery-parser--severity-face)))
 
 ;;;###autoload
 (defun periphery-parser-project-error (input)
   "Parse project-level errors from INPUT (e.g., .xcodeproj: error: ...)."
   (when (string-match "\\(/[^:]+\\.xcodeproj\\): error: \\(.*\\)" input)
-    (let* ((project-file (match-string 1 input))
-           (raw-message (match-string 2 input))
-           (highlighted-message (periphery-parser--apply-highlighting raw-message)))
+    (let ((project-file (match-string 1 input))
+          (message (match-string 2 input)))
       (periphery-core-build-entry
        :path project-file
        :file (file-name-nondirectory project-file)
        :line "1"
        :severity "error"
-       :message highlighted-message
+       :message message
        :face-fn #'periphery-parser--severity-face))))
 
 ;;;###autoload
 (defun periphery-parser-build-warning (input)
   "Parse build-level warnings/notes from INPUT (e.g., warning: ..., note: ...)."
   (when (string-match "^\\(warning\\|note\\): \\(.*\\)" input)
-    (let* ((severity (match-string 1 input))
-           (raw-message (match-string 2 input))
-           (highlighted-message (periphery-parser--apply-highlighting raw-message)))
+    (let ((severity (match-string 1 input))
+          (message (match-string 2 input)))
       (periphery-core-build-entry
        :path "Build System"
        :file "Xcode Build"
        :line "1"
        :severity severity
-       :message highlighted-message
+       :message message
        :face-fn #'periphery-parser--severity-face))))
 
 ;; Auto-initialize on load
