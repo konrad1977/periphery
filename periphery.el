@@ -44,7 +44,7 @@
                                ("Type" 9 nil)
                                ("File" 28 t)
                                ("Line" 4 nil)
-                               ("Message" 120 nil)
+                               ("Message" 200 nil)
                                ]
         tabulated-list-padding 1
         tabulated-list-sort-key (cons "Line" nil))
@@ -59,16 +59,19 @@
 (defun periphery--severity-priority (severity)
   "Return numeric priority for SEVERITY (lower number = higher priority)."
   (if (not (stringp severity))
-      4  ; Default priority for non-strings
+      5  ; Default priority for non-strings
     (let ((type (downcase (string-trim severity))))
       (cond
        ((string-prefix-p "error" type) 1)
        ((string-prefix-p "warning" type) 2)
-       ((string-prefix-p "note" type) 3)
-       (t 4)))))
+       ((string-prefix-p "analy" type) 3)
+       ((string-prefix-p "note" type) 4)
+       (t 5)))))
 
 (defun periphery--listing-command (errorList)
-  "Create an ERRORLIST for the current mode, prioritizing errors."
+  "Create an ERRORLIST for the current mode, prioritizing errors.
+Separates data population from window display so that buffer updates
+work reliably even when called from process sentinels."
   (let ((sorted-list (sort errorList
                            (lambda (a b)
                              (let* ((entry-a (cadr a))
@@ -81,37 +84,38 @@
                                     (priority-b (periphery--severity-priority severity-b)))
                                (if (= priority-a priority-b)
                                    (string< file-a file-b)
-                                 (< priority-a priority-b)))))))
+                                 (< priority-a priority-b))))))
+        (buffer (get-buffer-create periphery-buffer-name)))
 
-    (save-selected-window
-      (let* ((buffer (get-buffer-create periphery-buffer-name))
-             (window (get-buffer-window buffer)))
-        (pop-to-buffer buffer nil)
-        (periphery-mode)
+    ;; Step 1: Populate buffer data (does NOT require buffer to be visible)
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'periphery-mode)
+        (periphery-mode))
+      (setq tabulated-list-entries (-non-nil sorted-list))
+      (tabulated-list-print t))
 
-        (unless (equal (current-buffer) buffer)
-          (select-window window))
+    ;; Step 2: Ensure buffer is visible without stealing focus
+    (unless (get-buffer-window buffer)
+      (display-buffer buffer))
 
-        (setq tabulated-list-entries (-non-nil sorted-list))
+    ;; Step 3: Status message
+    (when (proper-list-p (buffer-local-value 'tabulated-list-entries buffer))
+      (periphery-message-with-count
+       :tag ""
+       :text "Errors or warnings"
+       :count (format "%d" (length (buffer-local-value 'tabulated-list-entries buffer)))
+       :attributes 'periphery-todo-face))
 
-        (tabulated-list-print t)
-
-        (if (proper-list-p tabulated-list-entries)
-            (periphery-message-with-count
-             :tag ""
-             :text "Errors or warnings"
-             :count (format "%d" (length tabulated-list-entries))
-             :attributes 'periphery-todo-face))
-
-        ;; Auto-open first error (only if it's actually an error, not a warning)
-        (run-at-time 0.2 nil
-                     (lambda ()
-                       (with-current-buffer (get-buffer periphery-buffer-name)
-                         (goto-char (point-min))
-                         (when-let* ((entry (tabulated-list-get-entry))
-                                     (severity (aref entry 0)))
-                           (when (string-match-p "error" (downcase severity))
-                             (periphery--open-current-line))))))))))
+    ;; Step 4: Auto-open first error (only if it's actually an error, not a warning)
+    (run-at-time 0.2 nil
+                 (lambda ()
+                   (when-let* ((buf (get-buffer periphery-buffer-name)))
+                     (with-current-buffer buf
+                       (goto-char (point-min))
+                       (when-let* ((entry (tabulated-list-get-entry))
+                                   (severity (aref entry 0)))
+                         (when (string-match-p "error" (downcase severity))
+                           (periphery--open-current-line)))))))))
 
 
 
@@ -145,6 +149,7 @@
       ((or "PERF" "PERFORMANCE") 'periphery-performance-face)
       ("TODO" 'periphery-todo-face)
       ("HACK" 'periphery-hack-face)
+      ((or "ANALYZER" "ANALYZE") 'periphery-analyzer-face)
       (_ 'periphery-error-face))))
 
 (defun periphery--full-color-from-keyword (keyword)
@@ -159,6 +164,7 @@
       ((or "PERF" "PERFORMANCE") 'periphery-performance-face-full)
       ("TODO" 'periphery-todo-face-full)
       ("HACK" 'periphery-hack-face-full)
+      ((or "ANALYZER" "ANALYZE") 'periphery-analyzer-face-full)
       (_ 'periphery-error-face-full))))
 
 (cl-defun periphery--mark-all-symbols (&key input regex property)
@@ -248,23 +254,39 @@
               errors)))
     errors))
 
+(defun periphery-clear ()
+  "Clear the periphery error list and buffer."
+  (interactive)
+  (setq periphery-errorList '())
+  (when-let* ((buffer (get-buffer periphery-buffer-name)))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (setq tabulated-list-entries '())
+        (tabulated-list-print t))))
+  (when periphery-debug
+    (message "Periphery error list cleared")))
+
 (cl-defun periphery-run-parser (input &rest config)
   "Run parser on INPUT with dynamic CONFIG. Return t if errors found.
 CONFIG can be:
-- :config PARSERS - Use specific parser list (e.g., '(compiler ktlint))
+- :config PARSERS - Use specific parser list (e.g., \\='(compiler ktlint))
 - :todo - Parse for TODO/FIXME/HACK comments  
 - :ktlint - Parse ktlint output
 - :compiler - Parse compiler output (default)
+- :analyzer - Parse static analysis output (warnings shown as Analyzer)
 - :search QUERY - Parse search results with optional query highlighting
 - :linter - Parse generic linter output
-- :test - Parse test output"
+- :test - Parse test output
+- :append - Append to existing errors instead of replacing
+- :clear - Clear existing errors first (default behavior when not appending)"
   (when periphery-debug
     (message "periphery-run-parser called with %d chars of input and config: %S" 
              (length input) config))
   
   (let ((type :compiler)
         (parsers nil)
-        (query nil))
+        (query nil)
+        (append-mode nil))
     
     ;; Process configuration parameters
     (while config
@@ -279,9 +301,12 @@ CONFIG can be:
           (setq type :linter)
           (setq parsers '(ktlint)))
          ((eq key :compiler)
-          (setq type :compiler)
-          (setq parsers '(compiler)))
-         ((eq key :search)
+           (setq type :compiler)
+           (setq parsers '(compiler)))
+          ((eq key :analyzer)
+           (setq type :analyzer)
+           (setq parsers '(analyzer)))
+          ((eq key :search)
           (setq type :search)
           (setq parsers '(search))
           (when config (setq query (pop config))))
@@ -290,6 +315,10 @@ CONFIG can be:
          ((eq key :test)
           (setq type :test)
           (setq parsers '(xctest)))
+         ((eq key :append)
+          (setq append-mode t))
+         ((eq key :clear)
+          (periphery-clear))
          (t
           (message "Unknown periphery-run-parser config: %s" key)))))
     
@@ -299,7 +328,11 @@ CONFIG can be:
                    :type type
                    :parsers parsers
                    :query query)))
-      (setq periphery-errorList errors)
+      ;; Either append or replace based on mode
+      (if append-mode
+          (setq periphery-errorList 
+                (delete-dups (append periphery-errorList errors)))
+        (setq periphery-errorList errors))
       (when (or (periphery--is-buffer-visible) periphery-errorList)
         (periphery--listing-command periphery-errorList))
       (not (null periphery-errorList))))) ; Return t if any errors found
@@ -330,7 +363,7 @@ CONFIG can be:
   (when-let* ((buffer (get-buffer periphery-buffer-name)))
     (kill-buffer buffer)))
 
-(defun periphery:toggle-buffer ()
+(defun periphery-toggle-buffer ()
   "Toggle visibility of the Periphery buffer window."
   (interactive)
   (if-let* ((buffer (get-buffer periphery-buffer-name)))

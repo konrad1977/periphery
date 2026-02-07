@@ -98,6 +98,16 @@
   "Performance face."
   :group 'periphery)
 
+(defface periphery-analyzer-face
+  '((t (:foreground "#cba6f7")))
+  "Analyze face (purple, same as performance)."
+  :group 'periphery)
+
+(defface periphery-analyzer-face-full
+  '((t (:foreground "#2B1E2E" :bold t :background "#cba6f7" :distant-foreground "#cba6f7")))
+  "Analyze face with background (purple badge)."
+  :group 'periphery)
+
 (defface periphery-todo-face
   '((t (:foreground "#74c7ec" :weight normal)))
   "Performance face."

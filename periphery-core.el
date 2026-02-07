@@ -8,6 +8,7 @@
 (require 'periphery-config)
 (require 'periphery-helper)
 (require 'cl-lib)
+(require 'seq)
 
 ;; Forward declaration to avoid circular dependency
 (defvar periphery-debug)
@@ -24,30 +25,83 @@
 TYPE can be :compiler, :search, :linter, or :test.
 PARSERS can be a list of parser IDs to use.
 CALLBACK is called with the parsed results.
-QUERY is an optional search query for highlighting in search results."
+QUERY is an optional search query for highlighting in search results.
+
+Optimized: splits input once, applies all parsers per line, and
+uses early-exit regex filtering to skip irrelevant lines."
   (when periphery-debug
     (message "periphery-core-parse called with type: %s, query: %s" type query))
 
   (setq periphery-core-last-input input)
   (setq periphery-core-error-list '())
 
-  (let ((parsers-to-use (or parsers
-                            (mapcar #'car (periphery-get-parsers-by-type type)))))
+  (let* ((parser-ids (or parsers
+                         (mapcar #'car (periphery-get-parsers-by-type type))))
+         ;; Build parser configs once, applying filters upfront
+         (parser-configs
+          (delq nil
+                (mapcar
+                 (lambda (id)
+                   (when-let* ((config (periphery-get-parser id)))
+                     (let ((parse-fn (plist-get config :parse-fn))
+                           (filter-fn (plist-get config :filter-fn))
+                           (regex (plist-get config :regex)))
+                       (when parse-fn
+                         (list :id id
+                               :parse-fn parse-fn
+                               :filter-fn filter-fn
+                               :regex regex)))))
+                 parser-ids)))
+         ;; Build a combined pre-filter regex for quick rejection of non-matching lines
+         (pre-filter-regex
+          (periphery-core--build-pre-filter parser-configs))
+         ;; Split input ONCE (not once per parser)
+         (lines (split-string input "\n"))
+         ;; Collect parsers that have filters (need full input, not per-line)
+         (filter-parsers (seq-filter (lambda (p) (plist-get p :filter-fn)) parser-configs))
+         (normal-parsers (seq-filter (lambda (p) (not (plist-get p :filter-fn))) parser-configs)))
 
     (when periphery-debug
-      (message "Parsers to use: %S" parsers-to-use))
+      (message "Parsers to use: %S (pre-filter: %s)" 
+               (mapcar (lambda (p) (plist-get p :id)) parser-configs)
+               (if pre-filter-regex "yes" "no")))
 
-    ;; Process input through each parser
-    (dolist (parser-id parsers-to-use)
-      (when-let* ((config (periphery-get-parser parser-id)))
-        (when periphery-debug
-          (message "Applying parser: %s" parser-id))
-        (periphery-core--apply-parser input config query)))
+    ;; Process parsers that need filtered input (rare, e.g. xcodebuild-error)
+    (dolist (parser filter-parsers)
+      (let* ((filter-fn (plist-get parser :filter-fn))
+             (parse-fn (plist-get parser :parse-fn))
+             (filtered-input (funcall filter-fn input)))
+        (dolist (line (split-string filtered-input "\n"))
+          (when (and line (not (string-empty-p line)))
+            (when-let* ((result (if query
+                                    (funcall parse-fn line query)
+                                  (funcall parse-fn line))))
+              (push result periphery-core-error-list))))))
 
-    ;; Remove duplicates and sort
+    ;; Process normal parsers: iterate lines once, try all parsers per line
+    (dolist (line lines)
+      (when (and line (not (string-empty-p line)))
+        ;; Quick pre-filter: skip lines that can't match ANY parser
+        (when (or (null pre-filter-regex)
+                  (string-match-p pre-filter-regex line))
+          (when periphery-debug
+            (message "  Parsing line (%d chars): %s" (length line) line))
+          ;; Try each parser on this line (first match wins for efficiency)
+          (let ((matched nil))
+            (dolist (parser normal-parsers)
+              (unless matched
+                (let ((parse-fn (plist-get parser :parse-fn)))
+                  (when-let* ((result (if query
+                                          (funcall parse-fn line query)
+                                        (funcall parse-fn line))))
+                    (when periphery-debug
+                      (message "    -> Got result from %s!" (plist-get parser :id)))
+                    (push result periphery-core-error-list)
+                    (setq matched t)))))))))
+
+    ;; Remove duplicates (sorting is done once in periphery--listing-command)
     (setq periphery-core-error-list
-          (periphery-core--sort-results
-           (delete-dups periphery-core-error-list)))
+          (delete-dups periphery-core-error-list))
 
     (when periphery-debug
       (message "Found %d errors" (length periphery-core-error-list)))
@@ -58,27 +112,26 @@ QUERY is an optional search query for highlighting in search results."
 
     periphery-core-error-list))
 
-(defun periphery-core--apply-parser (input config &optional query)
-  "Apply parser CONFIG to INPUT and collect results.
-Optional QUERY is passed to the parser function if it accepts it."
-  (when-let* ((parse-fn (plist-get config :parse-fn)))
-    ;; Apply filter if provided
-    (let ((filter-fn (plist-get config :filter-fn)))
-      (when filter-fn
-        (setq input (funcall filter-fn input))))
-
-    ;; Parse each line
-    (dolist (line (split-string input "\n"))
-      (when (and line (not (string-empty-p line)))
-        (when periphery-debug
-          (message "  Parsing line (%d chars): %s" (length line) line))
-        (let ((result (if query
-                          (funcall parse-fn line query)
-                        (funcall parse-fn line))))
-          (when result
-            (when periphery-debug
-              (message "    -> Got result!"))
-            (push result periphery-core-error-list)))))))
+(defun periphery-core--build-pre-filter (parser-configs)
+  "Build a combined regex from PARSER-CONFIGS for quick line rejection.
+Returns nil if no useful pre-filter can be built."
+  (let ((keywords '()))
+    (dolist (parser parser-configs)
+      (let ((id (plist-get parser :id)))
+        ;; Add cheap string patterns that identify potentially relevant lines
+        (pcase id
+          ('compiler (push "\\(?:error\\|warning\\|note\\):" keywords))
+          ('analyzer (push "\\(?:error\\|warning\\|note\\):" keywords))
+          ('xctest (push "failed" keywords))
+          ('build-warning (push "^\\(?:warning\\|note\\): " keywords))
+          ('deployment-target (push "Compiling for" keywords))
+          ('linker-error (push "\\(?:ld: \\|Undefined symbol\\|duplicate symbol\\|framework not found\\|library not found\\)" keywords))
+          ('xcodebuild-error nil)  ; Uses filter-fn, handled separately
+          ('cdtool (push "\\(?:cdtool\\|xcdatamodel\\)" keywords))
+          ;; For search/swiftlint/ktlint we can't easily pre-filter
+          (_ nil))))
+    (when keywords
+      (mapconcat #'identity keywords "\\|"))))
 
 (defun periphery-core--sort-results (results)
   "Sort RESULTS by severity and file."
@@ -92,15 +145,16 @@ Optional QUERY is passed to the parser function if it accepts it."
 
 (defun periphery-core--get-severity (entry)
   "Get numeric severity from ENTRY for sorting.
-Errors = 1, Warnings = 2, Info = 3, etc."
+Errors = 1, Warnings = 2, Analyzer = 3, Info = 4, etc."
   (let ((type (downcase (or (ignore-errors (aref (cadr entry) 0)) ""))))
     (cond
      ((string-match-p "error" type) 1)
      ((string-match-p "warning" type) 2)
-     ((string-match-p "fixme\\|fix" type) 3)
-     ((string-match-p "todo" type) 4)
-     ((string-match-p "note\\|info" type) 5)
-     (t 6))))
+     ((string-match-p "analy" type) 3)
+     ((string-match-p "fixme\\|fix" type) 4)
+     ((string-match-p "todo" type) 5)
+     ((string-match-p "note\\|info" type) 6)
+     (t 7))))
 
 ;;;###autoload
 (cl-defun periphery-core-build-entry (&key path file line column 
