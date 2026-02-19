@@ -13,11 +13,49 @@
 ;; Forward declaration to avoid circular dependency
 (defvar periphery-debug)
 
+(defcustom periphery-core-max-diagnostics 800
+  "Maximum number of diagnostics to collect before stopping.
+When a build produces thousands of errors (e.g. Swift 6 concurrency
+migration), parsing all of them creates temp buffers and text properties
+for each one, freezing Emacs.  This cap ensures responsiveness."
+  :type 'integer
+  :group 'periphery-config)
+
+(defcustom periphery-core-severity-filter 'all
+  "Which severity levels to show in the diagnostics buffer.
+Controls filtering at parse time so that unwanted diagnostics are
+never processed (saving CPU and memory).
+  `all'           -- show errors, warnings and notes
+  `errors-warnings' -- show errors and warnings only
+  `errors-only'   -- show errors only"
+  :type '(choice (const :tag "All (errors + warnings + notes)" all)
+                 (const :tag "Errors and warnings" errors-warnings)
+                 (const :tag "Errors only" errors-only))
+  :group 'periphery-config)
+
 (defvar periphery-core-error-list '()
   "Current list of parsed errors/warnings/matches.")
 
 (defvar periphery-core-last-input nil
   "Cache of last processed input for debugging.")
+
+(defun periphery-core--severity-allowed-p (result)
+  "Return non-nil if RESULT passes the current `periphery-core-severity-filter'.
+RESULT is a periphery entry: (path [severity file line message])."
+  (if (eq periphery-core-severity-filter 'all)
+      t
+    (let* ((entry (cadr result))
+           (severity-str (and (vectorp entry)
+                              (> (length entry) 0)
+                              (downcase (string-trim (aref entry 0))))))
+      (pcase periphery-core-severity-filter
+        ('errors-only
+         (string-match-p "error" severity-str))
+        ('errors-warnings
+         (or (string-match-p "error" severity-str)
+             (string-match-p "warning" severity-str)
+             (string-match-p "analy" severity-str)))
+        (_ t)))))
 
 ;;;###autoload
 (cl-defun periphery-core-parse (&key input type parsers callback query)
@@ -78,30 +116,41 @@ uses early-exit regex filtering to skip irrelevant lines."
                                   (funcall parse-fn line))))
               (push result periphery-core-error-list))))))
 
-    ;; Process normal parsers: iterate lines once, try all parsers per line
-    (dolist (line lines)
-      (when (and line (not (string-empty-p line)))
-        ;; Quick pre-filter: skip lines that can't match ANY parser
-        (when (or (null pre-filter-regex)
-                  (string-match-p pre-filter-regex line))
-          (when periphery-debug
-            (message "  Parsing line (%d chars): %s" (length line) line))
-          ;; Try each parser on this line (first match wins for efficiency)
-          (let ((matched nil))
-            (dolist (parser normal-parsers)
-              (unless matched
-                (let ((parse-fn (plist-get parser :parse-fn)))
-                  (when-let* ((result (if query
-                                          (funcall parse-fn line query)
-                                        (funcall parse-fn line))))
-                    (when periphery-debug
-                      (message "    -> Got result from %s!" (plist-get parser :id)))
-                    (push result periphery-core-error-list)
-                    (setq matched t)))))))))
-
-    ;; Remove duplicates (sorting is done once in periphery--listing-command)
-    (setq periphery-core-error-list
-          (delete-dups periphery-core-error-list))
+    ;; Process normal parsers: iterate lines once, try all parsers per line.
+    ;; Cap at periphery-core-max-diagnostics to avoid freezing on massive builds.
+    (let ((seen (make-hash-table :test 'equal))
+          (count 0)
+          (max-items periphery-core-max-diagnostics)
+          (capped nil))
+      (dolist (line lines)
+        (when (and (not capped)
+                   line (not (string-empty-p line)))
+          ;; Quick pre-filter: skip lines that can't match ANY parser
+          (when (or (null pre-filter-regex)
+                    (string-match-p pre-filter-regex line))
+            (when periphery-debug
+              (message "  Parsing line (%d chars): %s" (length line) line))
+            ;; Try each parser on this line (first match wins for efficiency)
+            (let ((matched nil))
+              (dolist (parser normal-parsers)
+                (unless matched
+                  (let ((parse-fn (plist-get parser :parse-fn)))
+                    (when-let* ((result (if query
+                                            (funcall parse-fn line query)
+                                          (funcall parse-fn line))))
+                      ;; Apply severity filter before collecting
+                      (when (periphery-core--severity-allowed-p result)
+                        (let ((key (car result)))
+                          ;; Hash-based dedup (O(1) per item instead of O(n^2) delete-dups)
+                          (unless (gethash key seen)
+                            (puthash key t seen)
+                            (push result periphery-core-error-list)
+                            (cl-incf count)
+                            (when (>= count max-items)
+                              (setq capped t)))))
+                      (setq matched t)))))))))
+      (when capped
+        (message "Periphery: capped at %d diagnostics (build has more)" max-items)))
 
     (when periphery-debug
       (message "Found %d errors" (length periphery-core-error-list)))
@@ -183,15 +232,12 @@ FACE-FN is a function to determine face from severity."
              (propertize message 'face 'periphery-message-face))))))
 
 (defun periphery-core--has-face-properties (string)
-  "Check if STRING has any face properties."
-  (let ((pos 0)
-        (len (length string))
-        (has-face nil))
-    (while (and (< pos len) (not has-face))
-      (when (get-text-property pos 'face string)
-        (setq has-face t))
-      (setq pos (1+ pos)))
-    has-face))
+  "Check if STRING has any face properties.
+Uses property-change search for efficiency instead of per-character scan."
+  (when (> (length string) 0)
+    (or (get-text-property 0 'face string)
+        (let ((next (next-single-property-change 0 'face string)))
+          (and next (< next (length string)))))))
 
 (defun periphery-core--propertize-severity (severity face)
   "Format and colorize SEVERITY with FACE."

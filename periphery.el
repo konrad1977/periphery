@@ -33,6 +33,7 @@
 (define-key periphery-mode-map (kbd "RET") #'periphery--open-current-line)
 (define-key periphery-mode-map (kbd "<return>") 'periphery--open-current-line)
 (define-key periphery-mode-map (kbd "o") 'periphery--open-current-line)
+(define-key periphery-mode-map (kbd "f") #'periphery-cycle-severity-filter)
 
 (defvar periphery-mode-map nil "Keymap for periphery.")
 
@@ -330,8 +331,15 @@ CONFIG can be:
                    :query query)))
       ;; Either append or replace based on mode
       (if append-mode
-          (setq periphery-errorList 
-                (delete-dups (append periphery-errorList errors)))
+          (let ((seen (make-hash-table :test 'equal))
+                (merged '()))
+            ;; Hash-based dedup for append mode (O(n) vs O(n^2))
+            (dolist (entry (append periphery-errorList errors))
+              (let ((key (car entry)))
+                (unless (gethash key seen)
+                  (puthash key t seen)
+                  (push entry merged))))
+            (setq periphery-errorList (nreverse merged)))
         (setq periphery-errorList errors))
       (when (or (periphery--is-buffer-visible) periphery-errorList)
         (periphery--listing-command periphery-errorList))
@@ -570,5 +578,26 @@ CONFIG can be:
                                                             (svg-tag-make text :face face :crop-left t)
                                                             (svg-tag-make action :face face :inverse t)
                                                             ))))))
+;;;###autoload
+(defun periphery-cycle-severity-filter ()
+  "Cycle the diagnostics severity filter: all -> errors+warnings -> errors only.
+Takes effect on the next build.  If results are already displayed,
+re-filters and refreshes the buffer immediately."
+  (interactive)
+  (let ((new-filter (pcase periphery-core-severity-filter
+                      ('all 'errors-warnings)
+                      ('errors-warnings 'errors-only)
+                      ('errors-only 'all)
+                      (_ 'all))))
+    (setq periphery-core-severity-filter new-filter)
+    (message "Periphery filter: %s"
+             (pcase new-filter
+               ('all "all (errors + warnings + notes)")
+               ('errors-warnings "errors and warnings")
+               ('errors-only "errors only")))
+    ;; If we have cached input, re-parse immediately with new filter
+    (when periphery-core-last-input
+      (periphery-run-parser periphery-core-last-input :compiler))))
+
 (provide 'periphery)
 ;;; periphery.el ends here
