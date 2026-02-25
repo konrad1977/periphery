@@ -597,7 +597,7 @@ but relabels warnings as Analyzer to visually distinguish them."
   (when (string-match "^xcodebuild: error: " input)
     (let ((message (substring input (match-end 0))))
       (periphery-core-build-entry
-       :path "Xcode Build"
+       :path (format "Xcode Build:%s" (secure-hash 'md5 message))
        :file "Xcode Build Configuration"
        :line "1"
        :severity "error"
@@ -637,7 +637,7 @@ but relabels warnings as Analyzer to visually distinguish them."
     (let ((severity (match-string 1 input))
           (message (match-string 2 input)))
       (periphery-core-build-entry
-       :path "Build System"
+       :path (format "Build System:%s" (secure-hash 'md5 message))
        :file "Xcode Build"
        :line "1"
        :severity severity

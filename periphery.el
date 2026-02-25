@@ -21,7 +21,13 @@
 
 (defvar default-length 8)
 
-(defvar periphery-mode-map nil
+(defvar periphery-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'periphery--open-current-line)
+    (define-key map (kbd "<return>") #'periphery--open-current-line)
+    (define-key map (kbd "o") #'periphery--open-current-line)
+    (define-key map (kbd "f") #'periphery-cycle-severity-filter)
+    map)
   "Keymap for periphery.")
 
 (defcustom periphery-trim-message-prefix nil
@@ -29,28 +35,47 @@
   :type 'boolean
   :group 'periphery)
 
-(setq periphery-mode-map (make-sparse-keymap))
-(define-key periphery-mode-map (kbd "RET") #'periphery--open-current-line)
-(define-key periphery-mode-map (kbd "<return>") 'periphery--open-current-line)
-(define-key periphery-mode-map (kbd "o") 'periphery--open-current-line)
-(define-key periphery-mode-map (kbd "f") #'periphery-cycle-severity-filter)
-
-(defvar periphery-mode-map nil "Keymap for periphery.")
-
 (defvar-local periphery-errorList '())
+
+(defun periphery--message-column-width ()
+  "Calculate message column width based on current window width.
+Subtracts fixed column widths (Type=9, File=28, Line=4) plus padding and separators."
+  (max 40 (- (window-width) 46)))
+
+(defun periphery--on-window-resize (frame)
+  "Update message column width when FRAME is resized."
+  (dolist (window (window-list frame))
+    (when (buffer-live-p (window-buffer window))
+      (with-current-buffer (window-buffer window)
+        (when (derived-mode-p 'periphery-mode)
+          (let ((new-width (max 40 (- (window-width window) 46))))
+            (unless (equal (aref tabulated-list-format 3)
+                           (list "Message" new-width nil))
+              (setf (aref tabulated-list-format 3)
+                    (list "Message" new-width nil))
+              (tabulated-list-init-header)
+              (tabulated-list-print t))))))))
 
 (define-derived-mode periphery-mode tabulated-list-mode "Periphery-mode"
   "Periphery mode.  A mode to show compile errors like Flycheck."
-  (setq tabulated-list-format [
-                               ("Type" 9 nil)
-                               ("File" 28 t)
-                               ("Line" 4 nil)
-                               ("Message" 200 nil)
-                               ]
+  (setq tabulated-list-format (vector
+                               '("Type" 9 nil)
+                               '("File" 28 t)
+                               '("Line" 4 nil)
+                               (list "Message" (periphery--message-column-width) nil))
         tabulated-list-padding 1
         tabulated-list-sort-key (cons "Line" nil))
   (use-local-map periphery-mode-map)
+  (add-hook 'window-size-change-functions #'periphery--on-window-resize)
   (tabulated-list-init-header))
+
+;; Evil-mode compatibility: bind keys in normal-state so they are not shadowed
+(with-eval-after-load 'evil
+  (evil-define-key 'normal periphery-mode-map
+    (kbd "RET") #'periphery--open-current-line
+    (kbd "<return>") #'periphery--open-current-line
+    "o" #'periphery--open-current-line
+    "f" #'periphery-cycle-severity-filter))
 
 (defun periphery--open-current-line ()
   "Open current current line."
